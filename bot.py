@@ -3,6 +3,7 @@ import re
 import json
 import html
 import time
+from datetime import datetime
 import random
 import socket
 import requests
@@ -21,22 +22,30 @@ ALIVE = []               # پروکسی‌های سالمِ همین اجرا
 STATE_FILE = "posted.json"
 MAX_PER_RUN = 8
 
-# (دسته, آدرس RSS)
+# (دسته, آدرس RSS, داخلی؟)
 # دسته‌ها: general, politics, economy, sports, tech
+# منابع خارجی/بین‌المللی اولویت دارن؛ منابع داخلی (True) در هر اجرا حداکثر MAX_DOMESTIC_PER_RUN خبر می‌ذارن
 FEEDS = [
-    ("general", "https://www.isna.ir/rss"),
-    ("general", "https://www.mehrnews.com/rss"),
-    ("general", "https://www.irna.ir/rss"),
-    ("general", "https://www.farsnews.ir/rss"),
-    ("general", "https://www.khabaronline.ir/rss"),
-    ("general", "https://parsi.euronews.com/rss?format=mrss"),
-    ("general", "https://rss.dw.com/xml/rss-per-all"),
-    ("economy", "https://donya-e-eqtesad.com/rss"),
-    ("economy", "https://www.eghtesadnews.com/rss"),
-    ("sports", "https://www.varzesh3.com/rss/all"),
-    ("tech", "https://digiato.com/feed"),
-    ("tech", "https://www.zoomit.ir/feed/"),
+    # --- منابع اصلی (کانال‌های تلگرام) ---
+    ("general", "tg:AloNews", False),
+    ("economy", "tg:arz_talaaa", False),
+    ("general", "tg:VahidOnline", False),
+    # --- خبرگزاری‌های خارجی ---
+    ("general", "https://parsi.euronews.com/rss?format=mrss", False),
+    ("general", "https://rss.dw.com/xml/rss-per-all", False),
+    ("general", "https://www.france24.com/fa/rss", False),
+    ("general", "https://farsi.alarabiya.net/feed/rss2/fa.xml", False),
+    ("general", "https://www.independentpersian.com/rss.xml", False),
+    # --- منابع داخلی (خیلی کم استفاده می‌شن) ---
+    ("general", "https://www.isna.ir/rss", True),
+    ("sports", "https://www.varzesh3.com/rss/all", True),
+    ("tech", "https://digiato.com/feed", True),
+    # کانال تلگرامی عمومی دیگه: آیدی رو بدون @ بعد از tg: بنویس، مثلاً:
+    # ("general", "tg:CHANNELNAME", False),
 ]
+MAX_DOMESTIC_PER_RUN = 1
+DOMESTIC_CHANCE = 0.3   # فقط در حدود ۳۰٪ اجراها یک خبر داخلی منتشر می‌شه
+DEDUP_HOURS = 8         # خبرهای شبیه به هم در این بازه تکراری حساب می‌شن
 
 # ====== دسته‌بندی و ایموجی ======
 FLASH_KW = ["فوری", "عاجل", "انفجار", "حمله", "جنگ", "موشک", "زلزله", "کشته", "ترور"]
@@ -48,10 +57,18 @@ ECON_KW = ["دلار", "یورو", "طلا", "سکه", "بورس", "تورم", "
            "یارانه", "بنزین", "صادرات", "واردات"]
 
 
+SPORT_KW = ["فوتبال", "لیگ", "جام جهانی", "بازیکن", "مربی", "تیم ملی", "المپیک",
+            "والیبال", "کشتی", "بسکتبال", "پرسپولیس", "استقلال", "گل زد"]
+
+
 def pick_emoji(category, title):
-    flash = any(k in title for k in FLASH_KW)
-    if flash:
+    # ورزشی و فناوری و معمولی: 🔵
+    if category in ("sports", "tech") or any(k in title for k in SPORT_KW):
+        return "🔵"
+    # سیاسی و مهم و فوری: 🔴
+    if any(k in title for k in FLASH_KW):
         return "🔴"
+    # اقتصادی: 🟡
     if category == "economy" or any(k in title for k in ECON_KW):
         return "🟡"
     if category == "politics" or any(k in title for k in POLITICS_KW):
@@ -131,23 +148,103 @@ def find_media(e):
 
 # ====== حافظه ======
 def load_state():
-    if not os.path.exists(STATE_FILE):
-        return {"seen": [], "seeded": []}
-    with open(STATE_FILE, encoding="utf-8") as f:
-        data = json.load(f)
-    if isinstance(data, list):  # فرمت قدیمی
-        return {"seen": data, "seeded": []}
-    return data
+    state = {"seen": [], "seeded": [], "titles": []}
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):  # فرمت قدیمی
+            state["seen"] = data
+        else:
+            state.update(data)
+    return state
 
 
 def save_state(state):
-    state["seen"] = state["seen"][-4000:]
+    state["seen"] = state["seen"][-5000:]
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False)
 
 
+# ====== تشخیص خبر تکراری ======
+def tokens_of(item):
+    text = item["title"] + " " + item["summary"][:80]
+    text = text.replace("ي", "ی").replace("ك", "ک")
+    text = re.sub(r"[^\w\s]", " ", text)
+    return {w for w in text.split() if len(w) >= 3}
+
+
+def is_dup(tok, others):
+    if not tok:
+        return False
+    for o in others:
+        union = len(tok | o)
+        if union and len(tok & o) / union >= 0.5:
+            return True
+    return False
+
+
 # ====== دریافت خبر ======
-def fetch_feed(category, url):
+
+# ====== خبر از کانال تلگرام عمومی ======
+def clean_tg(text):
+    text = re.sub(r"(?:https?://)?(?:t|telegram)\.me/\S+", "", text)
+    text = re.sub(r"@\w+", "", text)
+    lines = []
+    for line in text.split("\n"):
+        if re.search(r"(عضو|join|دنبال|فالو|ورود).{0,20}(کانال|channel|بشید|شوید)", line, re.I):
+            continue
+        lines.append(line.strip())
+    return "\n".join(lines)
+
+
+def fetch_tg(category, name, domestic):
+    items = []
+    try:
+        from bs4 import BeautifulSoup
+        r = requests.get(f"https://t.me/s/{name}", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        soup = BeautifulSoup(r.text, "html.parser")
+        for box in soup.select("div.tgme_widget_message"):
+            post_id = box.get("data-post")
+            body = box.select_one(".tgme_widget_message_text")
+            if not post_id or not body:
+                continue
+            for br in body.find_all("br"):
+                br.replace_with("\n")
+            text = clean_tg(body.get_text())
+            lines = [l for l in text.split("\n") if l.strip()]
+            if not lines or len(text) < 15:
+                continue
+            title = clean(lines[0], 200)
+            summary = clean(" ".join(lines[1:]), 500) if len(lines) > 1 else ""
+            if not title:
+                continue
+            image, video = None, None
+            a = box.select_one("a.tgme_widget_message_photo_wrap")
+            if a:
+                m = re.search(r"url\('([^']+)'\)", a.get("style", ""))
+                image = m.group(1) if m else None
+            v = box.select_one("video")
+            if v and str(v.get("src", "")).startswith("http"):
+                video = v["src"]
+            t = box.select_one("time")
+            ts = 0
+            if t and t.get("datetime"):
+                try:
+                    ts = datetime.fromisoformat(t["datetime"]).timestamp()
+                except ValueError:
+                    pass
+            items.append({"id": "tg:" + post_id, "title": title, "summary": summary,
+                          "category": category, "domestic": domestic,
+                          "image": image, "video": video, "ts": ts})
+    except Exception as ex:
+        print("telegram channel error:", name, ex)
+    items.sort(key=lambda x: x["ts"])
+    print(f"{len(items):3d} items  tg:{name}")
+    return items
+
+def fetch_feed(category, url, domestic):
+    if url.startswith("tg:"):
+        return fetch_tg(category, url[3:], domestic)
     items = []
     try:
         feed = feedparser.parse(url, request_headers={"User-Agent": "Mozilla/5.0"})
@@ -164,7 +261,7 @@ def fetch_feed(category, url):
             ts = time.mktime(e.published_parsed) if e.get("published_parsed") else 0
             image, video = find_media(e)
             items.append({"id": uid, "title": title, "summary": summary,
-                          "category": category, "image": image, "video": video, "ts": ts})
+                          "category": category, "domestic": domestic, "image": image, "video": video, "ts": ts})
     except Exception as ex:
         print("feed error:", url, ex)
     items.sort(key=lambda x: x["ts"])
@@ -242,18 +339,20 @@ def send(item):
 def main():
     prepare_proxies()
     state = load_state()
-    seen = set(state["seen"])
+    seen = dict.fromkeys(state["seen"])   # ترتیب حفظ می‌شه
     seeded = set(state["seeded"])
+    now = time.time()
+    recent = [t for t in state["titles"] if now - t["t"] < DEDUP_HOURS * 3600]
     candidates = {}
 
-    for category, url in FEEDS:
-        items = fetch_feed(category, url)
+    for category, url, domestic in FEEDS:
+        items = fetch_feed(category, url, domestic)
         if not items:
             continue
         if url not in seeded:
             # منبع جدید: فقط آخرین خبر منتشر می‌شه، بقیه به‌عنوان قدیمی ثبت می‌شن
             for i in items[:-1]:
-                seen.add(i["id"])
+                seen[i["id"]] = None
             fresh = [items[-1]]
             seeded.add(url)
         else:
@@ -262,15 +361,40 @@ def main():
             if i["id"] not in seen:
                 candidates[i["id"]] = i
 
-    to_post = sorted(candidates.values(), key=lambda x: x["ts"])[:MAX_PER_RUN]
+    allc = list(candidates.values())
+
+    # خبرهای داخلی: خیلی کم
+    domestic = sorted([i for i in allc if i["domestic"]], key=lambda x: -x["ts"])
+    picked = domestic[:MAX_DOMESTIC_PER_RUN] if random.random() < DOMESTIC_CHANCE else []
+    for i in domestic:
+        if i not in picked:
+            seen[i["id"]] = None
+    pool = sorted([i for i in allc if not i["domestic"]], key=lambda x: x["ts"]) + picked
+
+    # حذف خبرهای تکراری (با خبرهای اخیر و با همدیگه)
+    recent_sets = [set(t["k"]) for t in recent]
+    kept_sets, final = [], []
+    for item in pool:
+        tok = tokens_of(item)
+        if is_dup(tok, recent_sets) or is_dup(tok, kept_sets):
+            seen[item["id"]] = None
+            print("duplicate skipped:", item["title"][:50])
+            continue
+        item["tok"] = tok
+        kept_sets.append(tok)
+        final.append(item)
+
+    to_post = sorted(final, key=lambda x: x["ts"])[:MAX_PER_RUN]
     for item in to_post:
         if send(item):
-            seen.add(item["id"])
+            seen[item["id"]] = None
+            recent.append({"t": time.time(), "k": sorted(item["tok"])})
             print("posted:", item["title"][:60])
         time.sleep(3)
 
     state["seen"] = list(seen)
     state["seeded"] = list(seeded)
+    state["titles"] = recent[-300:]
     save_state(state)
 
 
