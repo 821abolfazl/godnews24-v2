@@ -51,7 +51,9 @@ DEDUP_HOURS = 8         # خبرهای شبیه به هم در این بازه �
 FLASH_KW = ["فوری", "عاجل", "انفجار", "حمله", "جنگ", "موشک", "زلزله", "کشته", "ترور"]
 POLITICS_KW = ["رئیس‌جمهور", "رییس‌جمهور", "رهبر انقلاب", "مجلس", "دولت", "وزیر",
                "تحریم", "مذاکره", "شورای امنیت", "ترامپ", "نتانیاهو", "بایدن",
-               "سیاست", "انتخابات", "سپاه", "پزشکیان", "اسرائیل", "آمریکا"]
+               "سیاست", "انتخابات", "سپاه", "پزشکیان", "اسرائیل", "آمریکا",
+               "سران", "نشست", "سفیر", "دیپلمات", "پارلمان", "قطعنامه", "ناتو",
+               "سازمان ملل", "کاخ سفید", "کرملین", "ارتش", "نظامی", "آتش‌بس", "پوتین", "اوکراین"]
 ECON_KW = ["دلار", "یورو", "طلا", "سکه", "بورس", "تورم", "بانک", "ارز", "نفت",
            "اقتصاد", "بازار", "قیمت", "رمزارز", "بیت‌کوین", "بیت کوین", "مسکن",
            "یارانه", "بنزین", "صادرات", "واردات"]
@@ -69,7 +71,8 @@ def pick_emoji(category, title):
     if any(k in title for k in FLASH_KW):
         return "🔴"
     # اقتصادی: 🟡
-    if category == "economy" or any(k in title for k in ECON_KW):
+    econ_title = re.sub(r"ارز(?=ان|ش|ی|ن)", "", title)  # ارزان/ارزش اقتصادی حساب نمی‌شن
+    if category == "economy" or any(k in econ_title for k in ECON_KW):
         return "🟡"
     if category == "politics" or any(k in title for k in POLITICS_KW):
         return "🔴"
@@ -109,6 +112,83 @@ def clean(text, limit):
     if len(text) > limit:
         text = text[:limit].rsplit(" ", 1)[0] + "…"
     return text
+
+
+def clean_paras(raw, limit=700):
+    """متن رو به پاراگراف‌های تمیز (بدون منبع) تبدیل می‌کنه."""
+    raw = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", raw or "")
+    text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    paras, total = [], 0
+    for line in text.split("\n"):
+        line = strip_sources(line.strip())
+        if len(line) < 6:
+            continue
+        if total + len(line) > limit:
+            room = limit - total
+            if room > 60:
+                paras.append(line[:room].rsplit(" ", 1)[0] + "…")
+            break
+        paras.append(line)
+        total += len(line)
+    return paras
+
+
+# ====== نفت و پرچم کشورها ======
+def is_oil_price(title):
+    has_oil = any(k in title for k in ["نفت", "برنت", "WTI"])
+    has_price = any(k in title for k in ["قیمت", "نرخ", "بشکه", "برنت", "WTI", "دلاری"])
+    return has_oil and has_price
+
+
+COUNTRIES = {
+    "IR": ["ایران"], "US": ["آمریکا", "امریکا", "ایالات متحده"], "RU": ["روسیه"],
+    "CN": ["چین"], "IL": ["اسرائیل"], "IQ": ["عراق"], "TR": ["ترکیه"],
+    "SA": ["عربستان"], "AE": ["امارات"], "QA": ["قطر"], "KW": ["کویت"],
+    "BH": ["بحرین"], "OM": ["عمان"], "LB": ["لبنان"], "SY": ["سوریه"],
+    "YE": ["یمن"], "PS": ["فلسطین"], "JO": ["اردن"], "EG": ["مصر"],
+    "LY": ["لیبی"], "DZ": ["الجزایر"], "MA": ["مراکش"], "TN": ["تونس"],
+    "SD": ["سودان"], "AF": ["افغانستان"], "PK": ["پاکستان"], "IN": ["هند"],
+    "BD": ["بنگلادش"], "JP": ["ژاپن"], "KR": ["کره جنوبی"], "KP": ["کره شمالی"],
+    "TW": ["تایوان"], "VN": ["ویتنام"], "ID": ["اندونزی"], "MY": ["مالزی"],
+    "TH": ["تایلند"], "PH": ["فیلیپین"], "SG": ["سنگاپور"], "AU": ["استرالیا"],
+    "NZ": ["نیوزیلند"], "CA": ["کانادا"], "MX": ["مکزیک"], "BR": ["برزیل"],
+    "AR": ["آرژانتین"], "VE": ["ونزوئلا"], "CU": ["کوبا"], "CO": ["کلمبیا"],
+    "CL": ["شیلی"], "DE": ["آلمان"], "FR": ["فرانسه"],
+    "GB": ["انگلیس", "انگلستان", "بریتانیا"], "IT": ["ایتالیا"], "ES": ["اسپانیا"],
+    "PT": ["پرتغال"], "NL": ["هلند"], "BE": ["بلژیک"], "CH": ["سوئیس"],
+    "AT": ["اتریش"], "SE": ["سوئد"], "NO": ["نروژ"], "DK": ["دانمارک"],
+    "FI": ["فنلاند"], "PL": ["لهستان"], "UA": ["اوکراین"], "BY": ["بلاروس"],
+    "RO": ["رومانی"], "HU": ["مجارستان"], "GR": ["یونان"], "RS": ["صربستان"],
+    "AM": ["ارمنستان"], "AZ": ["جمهوری آذربایجان", "آذربایجان"], "GE": ["گرجستان"],
+    "KZ": ["قزاقستان"], "UZ": ["ازبکستان"], "TM": ["ترکمنستان"],
+    "TJ": ["تاجیکستان"], "KG": ["قرقیزستان"], "ZA": ["آفریقای جنوبی"],
+    "NG": ["نیجریه"], "ET": ["اتیوپی"], "KE": ["کنیا"], "IE": ["ایرلند"],
+    "NP": ["نپال"], "LK": ["سریلانکا"], "MM": ["میانمار"], "KH": ["کامبوج"],
+    "CY": ["قبرس"], "BG": ["بلغارستان"], "HR": ["کرواسی"], "PA": ["پاناما"],
+}
+_L = "\u0600-\u06FF\u200c"
+COUNTRY_RE = []
+for _code, _names in COUNTRIES.items():
+    _alt = "|".join(re.escape(n) for n in sorted(_names, key=len, reverse=True))
+    COUNTRY_RE.append((_code, re.compile(
+        rf"(?<![{_L}])(?:{_alt})(?:\u200c?(?:های|ها|یی|ایی|ای|ی)){{0,2}}(?![{_L}])")))
+NOT_COUNTRY = ["دریای عمان", "اقیانوس هند", "آذربایجان شرقی", "آذربایجان غربی",
+               "خلیج فارس", "تنگه هرمز"]
+
+
+def flags_for(title, limit=2):
+    if re.search("[\U0001F1E6-\U0001F1FF]", title):
+        return ""  # خودش پرچم داره
+    t = title.replace("ي", "ی").replace("ك", "ک")
+    for bad in NOT_COUNTRY:
+        t = t.replace(bad, " ")
+    found = []
+    for code, rx in COUNTRY_RE:
+        m = rx.search(t)
+        if m:
+            found.append((m.start(), code))
+    found.sort()
+    return "".join(chr(0x1F1E6 + ord(c) - 65) for _, code in found[:limit] for c in code)
 
 
 # ====== استخراج عکس و فیلم ======
@@ -215,7 +295,8 @@ def fetch_tg(category, name, domestic):
             if not lines or len(text) < 15:
                 continue
             title = clean(lines[0], 200)
-            summary = clean(" ".join(lines[1:]), 500) if len(lines) > 1 else ""
+            paras = [p for p in clean_paras("\n".join(lines[1:]), 700) if p != title]
+            summary = " ".join(paras)
             if not title:
                 continue
             image, video = None, None
@@ -233,7 +314,7 @@ def fetch_tg(category, name, domestic):
                     ts = datetime.fromisoformat(t["datetime"]).timestamp()
                 except ValueError:
                     pass
-            items.append({"id": "tg:" + post_id, "title": title, "summary": summary,
+            items.append({"id": "tg:" + post_id, "title": title, "summary": summary, "paras": paras,
                           "category": category, "domestic": domestic,
                           "image": image, "video": video, "ts": ts})
     except Exception as ex:
@@ -255,12 +336,13 @@ def fetch_feed(category, url, domestic):
             title = clean(e.title, 200)
             if not title:
                 continue
-            summary = clean(e.get("summary", ""), 350)
-            if summary == title or len(summary) < 20:
-                summary = ""
+            paras = [p for p in clean_paras(e.get("summary", ""), 700) if p != title]
+            summary = " ".join(paras)
+            if len(summary) < 20:
+                paras, summary = [], ""
             ts = time.mktime(e.published_parsed) if e.get("published_parsed") else 0
             image, video = find_media(e)
-            items.append({"id": uid, "title": title, "summary": summary,
+            items.append({"id": uid, "title": title, "summary": summary, "paras": paras,
                           "category": category, "domestic": domestic, "image": image, "video": video, "ts": ts})
     except Exception as ex:
         print("feed error:", url, ex)
@@ -303,18 +385,43 @@ def prepare_proxies(want=10, max_checks=60):
 
 
 # ====== ارسال ======
-def build_text(item, with_summary=True):
+MARKER = {"🔴": "🔻", "🟡": "🔶", "🔵": "🔷"}
+
+
+def build_text(item, max_len=4000):
     esc = html.escape
-    parts = [f"{pick_emoji(item['category'], item['title'])} <b>{esc(item['title'])}</b>"]
-    if with_summary and item["summary"]:
-        parts.append(esc(item["summary"]))
+    base = pick_emoji(item["category"], item["title"])
+    marker = MARKER[base]
+    flags = flags_for(item["title"])
+    if is_oil_price(item["title"]):
+        lead = "🛢️"          # قیمت نفت: فقط همین ایموجی
+        if base == "🔵":
+            marker = "🔶"
+    elif flags:
+        lead = flags          # اگه پرچم هست، ایموجی دسته‌بندی گذاشته نمی‌شه
+    else:
+        lead = base
+    first = f"{lead} <b>{esc(item['title'])}</b>"
+
     link = random.choice(ALIVE) if ALIVE else PROXY_LINK
     if link:
-        parts.append(f'<a href="{html.escape(link, quote=True)}">پروکسی</a>😉')
+        proxy = f'<a href="{html.escape(link, quote=True)}">پروکسی</a>😉'
     else:
-        parts.append("پروکسی😉")
-    parts.append(CHANNEL)
-    return "\n\n".join(parts)
+        proxy = "پروکسی😉"
+    tail = [proxy, CHANNEL]
+
+    paras = list(item.get("paras") or [])
+    mark = len(paras) >= 2   # فقط خبرِ چندپاراگرافی علامت می‌گیره
+
+    def assemble(ps):
+        body = [f"{marker} {esc(p)}" if mark else esc(p) for p in ps]
+        return "\n\n".join([first] + body + tail)
+
+    text = assemble(paras)
+    while len(text) > max_len and paras:
+        paras.pop()
+        text = assemble(paras)
+    return text
 
 
 def tg(method, **data):
@@ -326,9 +433,7 @@ def tg(method, **data):
 
 
 def send(item):
-    caption = build_text(item)
-    if len(caption) > 1000:
-        caption = build_text(item, with_summary=False)
+    caption = build_text(item, max_len=1000)
     if item["video"] and tg("sendVideo", video=item["video"], caption=caption):
         return True
     if item["image"] and tg("sendPhoto", photo=item["image"], caption=caption):
