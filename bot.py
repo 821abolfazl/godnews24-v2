@@ -180,8 +180,11 @@ for _code, _names in COUNTRIES.items():
     _alt = "|".join(re.escape(n) for n in sorted(_names, key=len, reverse=True))
     COUNTRY_RE.append((_code, re.compile(
         rf"(?<![{_L}])(?:{_alt})(?:\u200c?(?:های|ها|یی|ایی|ای|ی)){{0,2}}(?![{_L}])")))
-NOT_COUNTRY = ["دریای عمان", "اقیانوس هند", "آذربایجان شرقی", "آذربایجان غربی",
+NOT_COUNTRY = ["ایران خودرو", "ایران‌خودرو", "ایرانخودرو", "دریای عمان", "اقیانوس هند", "آذربایجان شرقی", "آذربایجان غربی",
                "خلیج فارس", "تنگه هرمز"]
+
+
+FLAG_WORDS = 6   # پرچم فقط وقتی که اسم کشور توی ۶ کلمه‌ی اولِ تیتر باشه
 
 
 def flags_for(title, limit=2):
@@ -190,6 +193,7 @@ def flags_for(title, limit=2):
     t = title.replace("ي", "ی").replace("ك", "ک")
     for bad in NOT_COUNTRY:
         t = t.replace(bad, " ")
+    t = " ".join(" ".join(t.split()).split(" ")[:FLAG_WORDS])
     found = []
     for code, rx in COUNTRY_RE:
         m = rx.search(t)
@@ -255,18 +259,19 @@ def save_state(state):
 
 # ====== تشخیص خبر تکراری ======
 def tokens_of(item):
-    text = item["title"] + " " + item["summary"][:80]
+    n = 600 if item.get("kind") else 80   # لیست قیمت: اعداد هم حساب می‌شن
+    text = item["title"] + " " + item["summary"][:n]
     text = text.replace("ي", "ی").replace("ك", "ک")
     text = re.sub(r"[^\w\s]", " ", text)
     return {w for w in text.split() if len(w) >= 3}
 
 
-def is_dup(tok, others):
+def is_dup(tok, others, th=0.5):
     if not tok:
         return False
     for o in others:
         union = len(tok | o)
-        if union and len(tok & o) / union >= 0.5:
+        if union and len(tok & o) / union >= th:
             return True
     return False
 
@@ -285,6 +290,76 @@ def clean_tg(text):
     return "\n".join(lines)
 
 
+# ====== ایموجی کانال‌ها، فیلتر کلمه، شوخی، لیست قیمت ======
+EMOJI_CHARS = ("\U0001F000-\U0001FAFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF"
+               "\u2190-\u21FF\u25A0-\u25FF\u200d\ufe0f\u20e3\u2139\u203c\u2049\u2122"
+               "\u3030\u303d\u3297\u3299\u00a9\u00ae")
+EMOJI_RE = re.compile("[" + EMOJI_CHARS + "]+")
+LEAD_RE = re.compile("^(?:[" + EMOJI_CHARS + "]|[\\s\\-\u2013\u2014\u2022\u00b7|])+")
+
+# خبرهایی که این کلمه‌ها توشون باشه منتشر نمی‌شن (بدون فاصله و نیم‌فاصله بنویس)
+BLOCKED_WORDS = ["خوشچشم"]
+
+# کانال‌هایی که خبرِ شوخی‌شون منتشر نمی‌شه
+JOKE_CHANNELS = {"AloNews"}
+JOKE_EMOJIS = "😂🤣😆😅😹😜🤪😝🙃😁"
+JOKE_RE = re.compile(r"شوخی|طنز|جوک|فکاهی|خنده\s?دار|خنده‌دار|بامزه|ترول|اول\s?آوریل|ه{3,}|خ{3,}")
+
+MONEY_KW = ["دلار", "یورو", "سکه", "طلا", "درهم", "پوند", "تتر", "بیت‌کوین", "بیت کوین", "ارز", "مثقال"]
+CAR_BRANDS = ["پراید", "پژو", "سمند", "دنا", "تیبا", "ساینا", "کوییک", "شاهین", "سورن", "رانا",
+              "تارا", "هایما", "چری", "جک", "کیا", "هیوندای", "تویوتا", "مزدا", "رنو", "نیسان",
+              "ام وی ام", "MVM", "فونیکس", "تیگو", "آریزو", "اطلس", "زامیاد", "سراتو",
+              "اسپورتیج", "النترا", "سانتافه", "تندر", "سایپا", "کرمان موتور", "مگان", "بنز", "بی ام و"]
+
+
+def strip_emoji(text):
+    """همه‌ی ایموجی‌ها رو از متن برمی‌داره."""
+    lines = []
+    for line in text.split("\n"):
+        line = EMOJI_RE.sub(" ", line)
+        line = re.sub(r"[ \t]{2,}", " ", line).strip()
+        line = re.sub(r"^[\-\u2013\u2014\u2022\u00b7|:؛،.\s]+", "", line)
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def strip_leading_emoji(line):
+    return LEAD_RE.sub("", line).strip()
+
+
+def is_blocked(text):
+    key = re.sub(r"[\s\u200c]", "", text)
+    return any(w in key for w in BLOCKED_WORDS)
+
+
+def looks_like_joke(raw):
+    return any(ch in raw for ch in JOKE_EMOJIS) or bool(JOKE_RE.search(raw))
+
+
+def has_word(text, w):
+    return re.search(r"(?<![\u0600-\u06FF])" + re.escape(w) + r"(?![\u0600-\u06FF])", text) is not None
+
+
+def digit_lines(lines):
+    return sum(1 for l in lines if len(re.findall(r"[0-9۰-۹]", l)) >= 2)
+
+
+def detect_pricelist(lines):
+    """'car' برای لیست قیمت خودرو، 'money' برای لیست قیمت طلا و ارز، وگرنه None."""
+    if len(lines) < 4 or digit_lines(lines) < 3:
+        return None
+    text = " ".join(lines)
+    head = lines[0]
+    brands = sum(1 for b in CAR_BRANDS if has_word(text, b))
+    if brands >= 3 or (("خودرو" in head or "ماشین" in head) and ("قیمت" in head or "لیست" in head)):
+        return "car"
+    money = sum(1 for k in MONEY_KW if k in text)
+    if money >= 2 or (money >= 1 and ("قیمت" in head or "نرخ" in head)):
+        return "money"
+    return None
+
+
 def parse_tg_page(page):
     """پست‌های صفحه‌ی عمومی کانال رو برمی‌گردونه (با bs4، یا بدون اون با regex)."""
     posts = []
@@ -292,6 +367,13 @@ def parse_tg_page(page):
         from bs4 import BeautifulSoup
     except ImportError:
         BeautifulSoup = None
+
+    def uniq(seq):
+        out = []
+        for x in seq:
+            if x not in out:
+                out.append(x)
+        return out
 
     if BeautifulSoup:
         soup = BeautifulSoup(page, "html.parser")
@@ -302,17 +384,16 @@ def parse_tg_page(page):
                 continue
             for br in body.find_all("br"):
                 br.replace_with("\n")
-            image, video = None, None
-            a = box.select_one("a.tgme_widget_message_photo_wrap")
-            if a:
+            photos = []
+            for a in box.select("a.tgme_widget_message_photo_wrap"):
                 m = re.search(r"url\('([^']+)'\)", a.get("style", ""))
-                image = m.group(1) if m else None
-            v = box.select_one("video")
-            if v and str(v.get("src", "")).startswith("http"):
-                video = v["src"]
+                if m:
+                    photos.append(m.group(1))
+            videos = [v["src"] for v in box.select("video") if str(v.get("src", "")).startswith("http")]
             t = box.select_one("time")
-            posts.append({"post_id": post_id, "text": body.get_text(), "image": image,
-                          "video": video, "dt": t.get("datetime") if t else None})
+            posts.append({"post_id": post_id, "text": body.get_text(),
+                          "media": [("photo", u) for u in uniq(photos)] + [("video", u) for u in uniq(videos)],
+                          "dt": t.get("datetime") if t else None})
     else:
         for blk in re.split(r'(?=<div class="tgme_widget_message_wrap)', page)[1:]:
             pid = re.search(r'data-post="([^"]+)"', blk)
@@ -322,12 +403,11 @@ def parse_tg_page(page):
                 continue
             raw = re.sub(r"(?i)<br\s*/?>", "\n", body.group(1))
             text = html.unescape(re.sub(r"<[^>]+>", "", raw))
-            img = re.search(r"tgme_widget_message_photo_wrap[^>]*style=\"[^\"]*url\('([^']+)'\)", blk)
-            vid = re.search(r'<video[^>]+src="([^"]+)"', blk)
+            photos = re.findall(r"tgme_widget_message_photo_wrap[^>]*style=\"[^\"]*url\('([^']+)'\)", blk)
+            videos = [u for u in re.findall(r'<video[^>]+src="([^"]+)"', blk) if u.startswith("http")]
             dt = re.search(r'<time[^>]+datetime="([^"]+)"', blk)
             posts.append({"post_id": pid.group(1), "text": text,
-                          "image": img.group(1) if img else None,
-                          "video": vid.group(1) if vid and vid.group(1).startswith("http") else None,
+                          "media": [("photo", u) for u in uniq(photos)] + [("video", u) for u in uniq(videos)],
                           "dt": dt.group(1) if dt else None})
     return posts
 
@@ -341,14 +421,29 @@ def fetch_tg(category, name, domestic):
         if not posts:
             print(f"  ! هیچ پستی خونده نشد: پیش‌نمایش عمومی کانال بسته‌ست یا دسترسی بلاکه (آیدی: {name})")
         for p in posts:
-            text = clean_tg(p["text"])
-            lines = [l for l in text.split("\n") if l.strip()]
-            if not lines or len(text) < 15:
+            raw = p["text"]
+            if is_blocked(raw):
+                print("  blocked word, skipped:", raw[:40].replace("\n", " "))
                 continue
-            title = clean(lines[0], 200)
+            if name in JOKE_CHANNELS and looks_like_joke(raw):
+                print("  joke, skipped:", raw[:40].replace("\n", " "))
+                continue
+            text = clean_tg(raw)
+            lines = [l.strip() for l in text.split("\n") if l.strip()]
+            kind = detect_pricelist(lines)
+            if kind:
+                # لیست قیمت: ایموجی‌های داخل متن دست‌نخورده می‌مونه، فقط ایموجی اول عوض می‌شه
+                title = clean(strip_leading_emoji(lines[0]), 200)
+                paras = [x for x in (strip_sources(l) for l in lines[1:]) if x]
+            else:
+                text = strip_emoji(text)  # ایموجی‌های خود کانال حذف می‌شه
+                lines = [l for l in text.split("\n") if l.strip()]
+                if not lines or len(text) < 15:
+                    continue
+                title = clean(lines[0], 200)
+                paras = [x for x in clean_paras("\n".join(lines[1:]), 700) if x != title]
             if not title:
                 continue
-            paras = [x for x in clean_paras("\n".join(lines[1:]), 700) if x != title]
             ts = 0
             if p["dt"]:
                 try:
@@ -356,8 +451,8 @@ def fetch_tg(category, name, domestic):
                 except ValueError:
                     pass
             items.append({"id": "tg:" + p["post_id"], "title": title, "summary": " ".join(paras),
-                          "paras": paras, "category": category, "domestic": domestic,
-                          "image": p["image"], "video": p["video"], "ts": ts})
+                          "paras": paras, "kind": kind, "category": category, "domestic": domestic,
+                          "media": p["media"], "image": None, "video": None, "ts": ts})
     except Exception as ex:
         print("telegram channel error:", name, ex)
     items.sort(key=lambda x: x["ts"])
@@ -432,17 +527,23 @@ MARKER = {"🔴": "🔻", "🟡": "🔶", "🔵": "🔷"}
 
 def build_text(item, max_len=4000):
     esc = html.escape
-    base = pick_emoji(item["category"], item["title"])
-    marker = MARKER[base]
-    flags = flags_for(item["title"])
-    if is_oil_price(item["title"]):
-        lead = "🛢️"          # قیمت نفت: فقط همین ایموجی
-        if base == "🔵":
-            marker = "🔶"
-    elif flags:
-        lead = flags          # اگه پرچم هست، ایموجی دسته‌بندی گذاشته نمی‌شه
+    kind = item.get("kind")
+    if kind:
+        # لیست قیمت: ایموجی اول ثابته و ایموجی‌های داخل لیست دست‌نخورده می‌مونه
+        lead = "🚙" if kind == "car" else "🟡"
+        marker = ""
     else:
-        lead = base
+        base = pick_emoji(item["category"], item["title"])
+        marker = MARKER[base]
+        flags = flags_for(item["title"])
+        if is_oil_price(item["title"]):
+            lead = "🛢️"          # قیمت نفت: فقط همین ایموجی
+            if base == "🔵":
+                marker = "🔶"
+        elif flags:
+            lead = flags          # اگه پرچم هست، ایموجی دسته‌بندی گذاشته نمی‌شه
+        else:
+            lead = base
     first = f"{lead} <b>{esc(item['title'])}</b>"
 
     link = random.choice(ALIVE) if ALIVE else PROXY_LINK
@@ -453,10 +554,13 @@ def build_text(item, max_len=4000):
     tail = [proxy, CHANNEL]
 
     paras = list(item.get("paras") or [])
-    mark = len(paras) >= 2   # فقط خبرِ چندپاراگرافی علامت می‌گیره
+    mark = (not kind) and len(paras) >= 2   # فقط خبرِ چندپاراگرافی علامت می‌گیره
 
     def assemble(ps):
-        body = [f"{marker} {esc(p)}" if mark else esc(p) for p in ps]
+        if kind:
+            body = ["\n".join(esc(p) for p in ps)] if ps else []
+        else:
+            body = [f"{marker} {esc(p)}" if mark else esc(p) for p in ps]
         return "\n\n".join([first] + body + tail)
 
     text = assemble(paras)
@@ -466,27 +570,92 @@ def build_text(item, max_len=4000):
     return text
 
 
-def tg(method, **data):
-    data.update({"chat_id": CHANNEL, "parse_mode": "HTML"})
+def tg(method, files=None, **data):
+    data["chat_id"] = CHANNEL
+    if method != "sendMediaGroup":
+        data["parse_mode"] = "HTML"
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
-    r = requests.post(url, data=data, timeout=60)
+    r = requests.post(url, data=data, files=files, timeout=120)
     if r.status_code == 429:  # محدودیت سرعت تلگرام: صبر و یک بار تلاش دوباره
         try:
             wait = int(r.json().get("parameters", {}).get("retry_after", 5))
         except Exception:
             wait = 5
         time.sleep(min(wait, 30))
-        r = requests.post(url, data=data, timeout=60)
+        r = requests.post(url, data=data, files=files, timeout=120)
     if not r.ok:
         print("  telegram error:", method, r.status_code, r.text[:150])
     return r.ok
 
 
-def send(item):
-    caption = build_text(item, max_len=1000)
-    if item["video"] and tg("sendVideo", video=item["video"], caption=caption):
+def download(url, limit=45 * 1024 * 1024):
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60, stream=True)
+        if not r.ok:
+            return None
+        data = b""
+        for chunk in r.iter_content(1 << 20):
+            data += chunk
+            if len(data) > limit:
+                return None
+        return data
+    except Exception as ex:
+        print("  download error:", ex)
+        return None
+
+
+def media_list(item):
+    if item.get("media"):
+        return item["media"][:10]
+    if item.get("video"):
+        return [("video", item["video"])]
+    if item.get("image"):
+        return [("photo", item["image"])]
+    return []
+
+
+def send_single(kind, url, caption):
+    method, field = ("sendVideo", "video") if kind == "video" else ("sendPhoto", "photo")
+    if tg(method, caption=caption, **{field: url}):
         return True
-    if item["image"] and tg("sendPhoto", photo=item["image"], caption=caption):
+    data = download(url)  # اگه تلگرام نتونست لینک رو بگیره، خودمون دانلود و آپلود می‌کنیم
+    if data:
+        name = "file.mp4" if kind == "video" else "file.jpg"
+        return tg(method, files={field: (name, data)}, caption=caption)
+    return False
+
+
+def send_group(media, caption):
+    arr = []
+    for i, (k, u) in enumerate(media):
+        m = {"type": k, "media": u}
+        if i == 0:
+            m.update({"caption": caption, "parse_mode": "HTML"})
+        arr.append(m)
+    if tg("sendMediaGroup", media=json.dumps(arr)):
+        return True
+    files, arr = {}, []
+    for i, (k, u) in enumerate(media):
+        d = download(u)
+        if not d:
+            continue
+        fname = f"f{i}"
+        files[fname] = (fname + (".mp4" if k == "video" else ".jpg"), d)
+        m = {"type": k, "media": f"attach://{fname}"}
+        if not arr:
+            m.update({"caption": caption, "parse_mode": "HTML"})
+        arr.append(m)
+    if len(arr) >= 2:
+        return tg("sendMediaGroup", files=files, media=json.dumps(arr))
+    return False
+
+
+def send(item):
+    media = media_list(item)
+    caption = build_text(item, max_len=1000)
+    if len(media) >= 2 and send_group(media, caption):
+        return True
+    if media and send_single(media[0][0], media[0][1], caption):
         return True
     return tg("sendMessage", text=build_text(item), disable_web_page_preview="true")
 
@@ -517,7 +686,8 @@ def choose(cands, limit, seen, recent_sets, kept_sets):
     final = []
     for item in sorted(cands, key=lambda x: -x["ts"]):
         tok = tokens_of(item)
-        if is_dup(tok, recent_sets) or is_dup(tok, kept_sets):
+        th = 0.9 if item.get("kind") else 0.5   # لیست قیمتِ تغییرکرده تکراری حساب نمی‌شه
+        if is_dup(tok, recent_sets, th) or is_dup(tok, kept_sets, th):
             seen[item["id"]] = None
             print("duplicate skipped:", item["title"][:50])
             continue
