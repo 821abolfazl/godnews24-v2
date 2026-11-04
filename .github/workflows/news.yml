@@ -1,0 +1,34 @@
+name: GodNews24 Bot
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  post-news:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install feedparser requests
+
+      - name: Run bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL: "@GodNews24"
+        run: python bot.py
+
+      - name: Save state
+        run: |
+          git config user.name "news-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add posted.json
+          git diff --cached --quiet || (git commit -m "update posted" && git push)
