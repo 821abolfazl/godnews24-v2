@@ -1,0 +1,41 @@
+name: GodNews24 Bot
+
+on:
+  schedule:
+    # ساعت‌ها به UTC هستن؛ تهران = UTC+3:30
+    # ۰۵:۰۰ تا ۲۱:۲۰ UTC  =  ۰۸:۳۰ تا ۰۰:۵۰ تهران
+    - cron: "*/20 5-20 * * *"
+    - cron: "0,20 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: godnews-bot
+  cancel-in-progress: false
+
+jobs:
+  post-news:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install feedparser requests beautifulsoup4
+
+      - name: Run bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHANNEL: "@GodNews24"
+        run: python bot.py
+
+      - name: Save state
+        run: |
+          git config user.name "news-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add posted.json
+          git diff --cached --quiet || (git commit -m "update posted" && git push)
