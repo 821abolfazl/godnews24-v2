@@ -3,7 +3,7 @@ import re
 import json
 import html
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import random
 import socket
 import requests
@@ -20,7 +20,15 @@ PROXY_FILE = "proxies.txt"  # هر خط یک لینک پروکسی
 ALIVE = []               # پروکسی‌های سالمِ همین اجرا
 
 STATE_FILE = "posted.json"
-MAX_PER_RUN = 8
+TG_EVERY_MIN = 20        # کانال‌های تلگرامی: هر ۲۰ دقیقه
+TG_MIN_POSTS = 5         # هر بار بین ۵ تا ۱۰ خبر
+TG_MAX_POSTS = 10
+OTHER_EVERY_MIN = 60     # بقیه‌ی منابع (خارجی و داخلی): تقریباً هر ساعت (اجراها هر ۲۰ دقیقه‌ان)
+OTHER_MAX_POSTS = 5      # حداکثر ۵ خبر
+SLACK_MIN = 5            # تحمل تأخیر/تعجیلِ زمان‌بندی گیت‌هاب
+QUIET_START = 1 * 60     # ساعت سکوت: از ۰۱:۰۰ به وقت تهران
+QUIET_END = 8 * 60 + 30  # تا ۰۸:۳۰ به وقت تهران
+STALE_MIN = 60           # خبرِ جامونده‌ی قدیمی‌تر از این (دقیقه) دور ریخته می‌شه
 
 # (دسته, آدرس RSS, داخلی؟)
 # دسته‌ها: general, politics, economy, sports, tech
@@ -44,7 +52,7 @@ FEEDS = [
     # ("general", "tg:CHANNELNAME", False),
 ]
 MAX_DOMESTIC_PER_RUN = 1
-DOMESTIC_CHANCE = 0.3   # فقط در حدود ۳۰٪ اجراها یک خبر داخلی منتشر می‌شه
+DOMESTIC_CHANCE = 0.5   # فقط در حدود نصف اجراهای «بقیه‌ی منابع» یک خبر داخلی منتشر می‌شه
 DEDUP_HOURS = 8         # خبرهای شبیه به هم در این بازه تکراری حساب می‌شن
 
 # ====== دسته‌بندی و ایموجی ======
@@ -277,28 +285,23 @@ def clean_tg(text):
     return "\n".join(lines)
 
 
-def fetch_tg(category, name, domestic):
-    items = []
+def parse_tg_page(page):
+    """پست‌های صفحه‌ی عمومی کانال رو برمی‌گردونه (با bs4، یا بدون اون با regex)."""
+    posts = []
     try:
         from bs4 import BeautifulSoup
-        r = requests.get(f"https://t.me/s/{name}", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
-        soup = BeautifulSoup(r.text, "html.parser")
+    except ImportError:
+        BeautifulSoup = None
+
+    if BeautifulSoup:
+        soup = BeautifulSoup(page, "html.parser")
         for box in soup.select("div.tgme_widget_message"):
             post_id = box.get("data-post")
-            body = box.select_one(".tgme_widget_message_text")
+            body = box.select_one(".js-message_text") or box.select_one(".tgme_widget_message_text")
             if not post_id or not body:
                 continue
             for br in body.find_all("br"):
                 br.replace_with("\n")
-            text = clean_tg(body.get_text())
-            lines = [l for l in text.split("\n") if l.strip()]
-            if not lines or len(text) < 15:
-                continue
-            title = clean(lines[0], 200)
-            paras = [p for p in clean_paras("\n".join(lines[1:]), 700) if p != title]
-            summary = " ".join(paras)
-            if not title:
-                continue
             image, video = None, None
             a = box.select_one("a.tgme_widget_message_photo_wrap")
             if a:
@@ -308,20 +311,59 @@ def fetch_tg(category, name, domestic):
             if v and str(v.get("src", "")).startswith("http"):
                 video = v["src"]
             t = box.select_one("time")
+            posts.append({"post_id": post_id, "text": body.get_text(), "image": image,
+                          "video": video, "dt": t.get("datetime") if t else None})
+    else:
+        for blk in re.split(r'(?=<div class="tgme_widget_message_wrap)', page)[1:]:
+            pid = re.search(r'data-post="([^"]+)"', blk)
+            body = (re.search(r'<div class="tgme_widget_message_text[^"]*js-message_text[^"]*"[^>]*>(.*?)</div>', blk, re.S)
+                    or re.search(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', blk, re.S))
+            if not pid or not body:
+                continue
+            raw = re.sub(r"(?i)<br\s*/?>", "\n", body.group(1))
+            text = html.unescape(re.sub(r"<[^>]+>", "", raw))
+            img = re.search(r"tgme_widget_message_photo_wrap[^>]*style=\"[^\"]*url\('([^']+)'\)", blk)
+            vid = re.search(r'<video[^>]+src="([^"]+)"', blk)
+            dt = re.search(r'<time[^>]+datetime="([^"]+)"', blk)
+            posts.append({"post_id": pid.group(1), "text": text,
+                          "image": img.group(1) if img else None,
+                          "video": vid.group(1) if vid and vid.group(1).startswith("http") else None,
+                          "dt": dt.group(1) if dt else None})
+    return posts
+
+
+def fetch_tg(category, name, domestic):
+    items = []
+    try:
+        r = requests.get(f"https://t.me/s/{name}", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        posts = parse_tg_page(r.text)
+        print(f"tg:{name} http={r.status_code} bytes={len(r.text)} posts_with_text={len(posts)}")
+        if not posts:
+            print(f"  ! هیچ پستی خونده نشد: پیش‌نمایش عمومی کانال بسته‌ست یا دسترسی بلاکه (آیدی: {name})")
+        for p in posts:
+            text = clean_tg(p["text"])
+            lines = [l for l in text.split("\n") if l.strip()]
+            if not lines or len(text) < 15:
+                continue
+            title = clean(lines[0], 200)
+            if not title:
+                continue
+            paras = [x for x in clean_paras("\n".join(lines[1:]), 700) if x != title]
             ts = 0
-            if t and t.get("datetime"):
+            if p["dt"]:
                 try:
-                    ts = datetime.fromisoformat(t["datetime"]).timestamp()
+                    ts = datetime.fromisoformat(p["dt"]).timestamp()
                 except ValueError:
                     pass
-            items.append({"id": "tg:" + post_id, "title": title, "summary": summary, "paras": paras,
-                          "category": category, "domestic": domestic,
-                          "image": image, "video": video, "ts": ts})
+            items.append({"id": "tg:" + p["post_id"], "title": title, "summary": " ".join(paras),
+                          "paras": paras, "category": category, "domestic": domestic,
+                          "image": p["image"], "video": p["video"], "ts": ts})
     except Exception as ex:
         print("telegram channel error:", name, ex)
     items.sort(key=lambda x: x["ts"])
     print(f"{len(items):3d} items  tg:{name}")
     return items
+
 
 def fetch_feed(category, url, domestic):
     if url.startswith("tg:"):
@@ -426,7 +468,15 @@ def build_text(item, max_len=4000):
 
 def tg(method, **data):
     data.update({"chat_id": CHANNEL, "parse_mode": "HTML"})
-    r = requests.post(f"https://api.telegram.org/bot{TOKEN}/{method}", data=data, timeout=60)
+    url = f"https://api.telegram.org/bot{TOKEN}/{method}"
+    r = requests.post(url, data=data, timeout=60)
+    if r.status_code == 429:  # محدودیت سرعت تلگرام: صبر و یک بار تلاش دوباره
+        try:
+            wait = int(r.json().get("parameters", {}).get("retry_after", 5))
+        except Exception:
+            wait = 5
+        time.sleep(min(wait, 30))
+        r = requests.post(url, data=data, timeout=60)
     if not r.ok:
         print("  telegram error:", method, r.status_code, r.text[:150])
     return r.ok
@@ -441,56 +491,94 @@ def send(item):
     return tg("sendMessage", text=build_text(item), disable_web_page_preview="true")
 
 
-def main():
-    prepare_proxies()
-    state = load_state()
-    seen = dict.fromkeys(state["seen"])   # ترتیب حفظ می‌شه
-    seeded = set(state["seeded"])
-    now = time.time()
-    recent = [t for t in state["titles"] if now - t["t"] < DEDUP_HOURS * 3600]
-    candidates = {}
-
-    for category, url, domestic in FEEDS:
+def collect(feeds, seen, seeded, seed_n):
+    """خبرهای تازه‌ی منابع رو جمع می‌کنه. منبع جدید: فقط seed_n خبر آخر، بقیه قدیمی حساب می‌شن."""
+    cands = {}
+    for category, url, domestic in feeds:
         items = fetch_feed(category, url, domestic)
         if not items:
             continue
         if url not in seeded:
-            # منبع جدید: فقط آخرین خبر منتشر می‌شه، بقیه به‌عنوان قدیمی ثبت می‌شن
-            for i in items[:-1]:
+            keep = seed_n if url.startswith("tg:") else 1
+            for i in items[:-keep]:
                 seen[i["id"]] = None
-            fresh = [items[-1]]
+            fresh = items[-keep:]
             seeded.add(url)
         else:
             fresh = items
         for i in fresh:
             if i["id"] not in seen:
-                candidates[i["id"]] = i
+                cands[i["id"]] = i
+    return list(cands.values())
 
-    allc = list(candidates.values())
 
-    # خبرهای داخلی: خیلی کم
-    domestic = sorted([i for i in allc if i["domestic"]], key=lambda x: -x["ts"])
-    picked = domestic[:MAX_DOMESTIC_PER_RUN] if random.random() < DOMESTIC_CHANCE else []
-    for i in domestic:
-        if i not in picked:
-            seen[i["id"]] = None
-    pool = sorted([i for i in allc if not i["domestic"]], key=lambda x: x["ts"]) + picked
-
-    # حذف خبرهای تکراری (با خبرهای اخیر و با همدیگه)
-    recent_sets = [set(t["k"]) for t in recent]
-    kept_sets, final = [], []
-    for item in pool:
+def choose(cands, limit, seen, recent_sets, kept_sets):
+    """جدیدترین خبرهای غیرتکراری رو تا سقف limit انتخاب می‌کنه."""
+    final = []
+    for item in sorted(cands, key=lambda x: -x["ts"]):
         tok = tokens_of(item)
         if is_dup(tok, recent_sets) or is_dup(tok, kept_sets):
             seen[item["id"]] = None
             print("duplicate skipped:", item["title"][:50])
             continue
+        if len(final) >= limit:
+            # صف کهنه نشه: خبر قدیمیِ جا‌مونده دور ریخته می‌شه
+            if item["ts"] and time.time() - item["ts"] > STALE_MIN * 60:
+                seen[item["id"]] = None
+            continue
         item["tok"] = tok
         kept_sets.append(tok)
         final.append(item)
+    return final
 
-    to_post = sorted(final, key=lambda x: x["ts"])[:MAX_PER_RUN]
-    for item in to_post:
+
+def is_quiet_hours():
+    t = datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)  # وقت تهران
+    m = t.hour * 60 + t.minute
+    return QUIET_START <= m < QUIET_END
+
+
+def main():
+    state = load_state()
+    now = time.time()
+    force = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"  # اجرای دستی: همه‌چیز
+    if not force and is_quiet_hours():
+        print("ساعت سکوته (۰۱:۰۰ تا ۰۸:۳۰ تهران)؛ خبری منتشر نمی‌شه.")
+        return
+    run_tg = force or now - state.get("last_tg", 0) >= (TG_EVERY_MIN - SLACK_MIN) * 60
+    run_other = force or now - state.get("last_other", 0) >= (OTHER_EVERY_MIN - SLACK_MIN) * 60
+    if not (run_tg or run_other):
+        print("هنوز موقع اجرا نیست.")
+        return
+
+    prepare_proxies()
+    seen = dict.fromkeys(state["seen"])   # ترتیب حفظ می‌شه
+    seeded = set(state["seeded"])
+    recent = [t for t in state["titles"] if now - t["t"] < DEDUP_HOURS * 3600]
+    recent_sets = [set(t["k"]) for t in recent]
+    kept_sets, to_post = [], []
+
+    tg_feeds = [f for f in FEEDS if f[1].startswith("tg:")]
+    other_feeds = [f for f in FEEDS if not f[1].startswith("tg:")]
+
+    if run_tg:
+        cands = collect(tg_feeds, seen, seeded, seed_n=TG_MAX_POSTS)
+        n = random.randint(TG_MIN_POSTS, TG_MAX_POSTS)
+        to_post += choose(cands, n, seen, recent_sets, kept_sets)
+        state["last_tg"] = now
+
+    if run_other:
+        cands = collect(other_feeds, seen, seeded, seed_n=1)
+        dom = sorted([i for i in cands if i["domestic"]], key=lambda x: -x["ts"])
+        keep_dom = dom[:MAX_DOMESTIC_PER_RUN] if random.random() < DOMESTIC_CHANCE else []
+        for i in dom:
+            if i not in keep_dom:
+                seen[i["id"]] = None
+        pool = [i for i in cands if not i["domestic"]] + keep_dom
+        to_post += choose(pool, OTHER_MAX_POSTS, seen, recent_sets, kept_sets)
+        state["last_other"] = now
+
+    for item in sorted(to_post, key=lambda x: x["ts"]):
         if send(item):
             seen[item["id"]] = None
             recent.append({"t": time.time(), "k": sorted(item["tok"])})
@@ -499,7 +587,7 @@ def main():
 
     state["seen"] = list(seen)
     state["seeded"] = list(seeded)
-    state["titles"] = recent[-300:]
+    state["titles"] = recent[-400:]
     save_state(state)
 
 
