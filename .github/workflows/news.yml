@@ -1,17 +1,19 @@
 name: GodNews24 Bot
 
 on:
+  # ساعت‌ها به UTC هستن (تهران = UTC+3:30). ۰۵:۰۷ تا ۲۱:۲۷ UTC = ۰۸:۳۷ تا ۰۰:۵۷ تهران
   schedule:
     - cron: "7,27,47 5-20 * * *"
     - cron: "7,27 21 * * *"
   workflow_dispatch:
     inputs:
       mode:
-        description: "manual or auto"
+        description: "manual = اجرای کامل دستی / auto = اجرای زمان‌بندی‌شده"
         default: "manual"
 
 permissions:
   contents: write
+  actions: write   # برای صدا زدن اجرای بعدی
 
 concurrency:
   group: godnews-bot
@@ -20,7 +22,7 @@ concurrency:
 jobs:
   post-news:
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 70   # اجرای معمولی چند دقیقه‌ست؛ فقط در حالت حلقه تا حدود یک ساعت طول می‌کشه
     steps:
       - uses: actions/checkout@v4
 
@@ -35,12 +37,14 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           RUN_MODE: ${{ github.event.inputs.mode }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # حالت حلقه (دقیق هر ۲۰ دقیقه): در Settings ← Secrets and variables ← Actions ← Variables
+          # یک متغیر به اسم LOOP_MINUTES با مقدار 55 بساز. فقط برای repository عمومی کار می‌کنه.
           LOOP_MINUTES: ${{ vars.LOOP_MINUTES }}
           CHANNEL: "@GodNews24"
         run: python bot.py
 
       - name: Save state
-        if: always()
+        if: always()   # حتی اگه ربات خطا بده، حافظه‌ی خبرهای ارسال‌شده ذخیره بشه
         run: |
           git config user.name "news-bot"
           git config user.email "bot@users.noreply.github.com"
