@@ -28,6 +28,7 @@ OTHER_MAX_POSTS = 5      # حداکثر ۵ خبر
 SLACK_MIN = 5            # تحمل تأخیر/تعجیلِ زمان‌بندی گیت‌هاب
 QUIET_START = 1 * 60     # ساعت سکوت: از ۰۱:۰۰ به وقت تهران
 QUIET_END = 8 * 60 + 30  # تا ۰۸:۳۰ به وقت تهران
+RUN_BUDGET_SEC = 300       # بیشتر از این توی یک اجرا خبر نمی‌فرسته (کل اجرا حداکثر ۸ دقیقه‌ست)
 STALE_MIN = 60           # خبرِ جامونده‌ی قدیمی‌تر از این (دقیقه) دور ریخته می‌شه
 
 # (دسته, آدرس RSS, داخلی؟)
@@ -56,7 +57,7 @@ DOMESTIC_CHANCE = 0.5   # فقط در حدود نصف اجراهای «بقیه�
 DEDUP_HOURS = 8         # خبرهای شبیه به هم در این بازه تکراری حساب می‌شن
 
 # ====== دسته‌بندی و ایموجی ======
-FLASH_KW = ["فوری", "عاجل", "انفجار", "حمله", "جنگ", "موشک", "زلزله", "کشته", "ترور"]
+FLASH_KW = ["فوری", "عاجل", "انفجار", "حمله", "موشک", "زلزله", "کشته", "ترور"]
 POLITICS_KW = ["رئیس‌جمهور", "رییس‌جمهور", "رهبر انقلاب", "مجلس", "دولت", "وزیر",
                "تحریم", "مذاکره", "شورای امنیت", "ترامپ", "نتانیاهو", "بایدن",
                "سیاست", "انتخابات", "سپاه", "پزشکیان", "اسرائیل", "آمریکا",
@@ -71,10 +72,18 @@ SPORT_KW = ["فوتبال", "لیگ", "جام جهانی", "بازیکن", "مر
             "والیبال", "کشتی", "بسکتبال", "پرسپولیس", "استقلال", "گل زد"]
 
 
-def pick_emoji(category, title):
+def pick_emoji(category, title, body=""):
     # ورزشی و فناوری و معمولی: 🔵
     if category in ("sports", "tech") or any(k in title for k in SPORT_KW):
         return "🔵"
+    full = title + " " + body
+    # کلمه‌های اجباری: اگه توی تیتر باشه 🔴 اول، بعد 🟡؛ اگه فقط توی متن باشه 🟡 اول، بعد 🔴
+    if RED_RE.search(title):
+        return "🔴"
+    if YELLOW_RE.search(title) or YELLOW_RE.search(full):
+        return "🟡"
+    if RED_RE.search(full):
+        return "🔴"
     # سیاسی و مهم و فوری: 🔴
     if any(k in title for k in FLASH_KW):
         return "🔴"
@@ -172,7 +181,7 @@ COUNTRIES = {
     "TJ": ["تاجیکستان"], "KG": ["قرقیزستان"], "ZA": ["آفریقای جنوبی"],
     "NG": ["نیجریه"], "ET": ["اتیوپی"], "KE": ["کنیا"], "IE": ["ایرلند"],
     "NP": ["نپال"], "LK": ["سریلانکا"], "MM": ["میانمار"], "KH": ["کامبوج"],
-    "CY": ["قبرس"], "BG": ["بلغارستان"], "HR": ["کرواسی"], "PA": ["پاناما"],
+    "CY": ["قبرس"], "BG": ["بلغارستان"], "HR": ["کرواسی"], "PA": ["پاناما"], "EU": ["اتحادیه اروپا", "اروپا"],
 }
 _L = "\u0600-\u06FF\u200c"
 COUNTRY_RE = []
@@ -183,6 +192,15 @@ for _code, _names in COUNTRIES.items():
 NOT_COUNTRY = ["ایران خودرو", "ایران‌خودرو", "ایرانخودرو", "دریای عمان", "اقیانوس هند", "آذربایجان شرقی", "آذربایجان غربی",
                "خلیج فارس", "تنگه هرمز"]
 
+
+# کلمه‌هایی که ایموجی اول رو اجباری می‌کنن
+RED_TERMS = ["جنگ", "سپاه", "ترامپ", "کمیسیون[\\s\u200c]+امنیت[\\s\u200c]+ملی"]
+YELLOW_TERMS = ["بورس", "فارکس", "ارز(?:ها|های)?[\\s\u200c]*دیجی?تال", "کریپتو", "رمز[\\s\u200c]*ارز"]
+_SUF = "(?:\u200c?(?:ها|های|ی|یی|ای))?"
+_red = "|".join(RED_TERMS)
+_yel = "|".join(YELLOW_TERMS)
+RED_RE = re.compile(rf"(?<![{_L}])(?:{_red}){_SUF}(?![{_L}])")      # جنگل قرمز حساب نمی‌شه
+YELLOW_RE = re.compile(rf"(?<![{_L}])(?:{_yel})")
 
 FLAG_WORDS = 6   # پرچم فقط وقتی که اسم کشور توی ۶ کلمه‌ی اولِ تیتر باشه
 
@@ -436,6 +454,14 @@ def tehran_now():
     return datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)
 
 
+CHANNEL_SKIP_FROM, CHANNEL_SKIP_TO = 1 * 60, 7 * 60   # پست‌های کانال‌ها بین ۰۱:۰۰ تا ۰۷:۰۰ تهران استفاده نمی‌شن
+
+
+def in_skip_hours(ts):
+    t = datetime.fromtimestamp(ts, timezone.utc) + timedelta(hours=3, minutes=30)
+    return CHANNEL_SKIP_FROM <= t.hour * 60 + t.minute < CHANNEL_SKIP_TO
+
+
 def tg_safe_html(inner):
     """HTML متن پست رو به فرمتی که تلگرام قبول می‌کنه تبدیل می‌کنه (بدون تغییر در محتوا)."""
     h = re.sub(r'<i class="emoji"[^>]*><b>(.*?)</b></i>', r"\1", inner or "", flags=re.S)
@@ -528,6 +554,7 @@ def fetch_kiosk(pages):
 
 def fetch_tg(category, name, domestic):
     items = []
+    skipped_night = 0
     try:
         r = requests.get(f"https://t.me/s/{name}", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
         posts = parse_tg_page(r.text)
@@ -564,13 +591,16 @@ def fetch_tg(category, name, domestic):
                     ts = datetime.fromisoformat(p["dt"]).timestamp()
                 except ValueError:
                     pass
+            if ts and in_skip_hours(ts):
+                skipped_night += 1
+                continue
             items.append({"id": "tg:" + p["post_id"], "title": title, "summary": " ".join(paras),
                           "paras": paras, "kind": kind, "category": category, "domestic": domestic,
                           "media": p["media"], "image": None, "video": None, "ts": ts})
     except Exception as ex:
         print("telegram channel error:", name, ex)
     items.sort(key=lambda x: x["ts"])
-    print(f"{len(items):3d} items  tg:{name}")
+    print(f"{len(items):3d} items  tg:{name}" + (f"  ({skipped_night} پست ساعت ۰۱ تا ۰۷ رد شد)" if skipped_night else ""))
     return items
 
 
@@ -639,6 +669,7 @@ def prepare_proxies(want=15, max_checks=80):
 
 # ====== ارسال ======
 PARSE_MODE = ["HTML"]
+UPLOAD_FAILS = [0]   # اگه آپلود دو بار تایم‌اوت شد، بقیه‌ی اجرا بدون آپلود ادامه پیدا می‌کنه
 MARKER = {"🔴": "🔻", "🟡": "🔶", "🔵": "🔷"}
 
 
@@ -658,13 +689,17 @@ def build_text(item, max_len=4000):
         lead = "🚙" if kind == "car" else "🟡"
         marker = ""
     else:
-        base = pick_emoji(item["category"], item["title"])
+        full = item["title"] + " " + item.get("summary", "")
+        base = pick_emoji(item["category"], item["title"], item.get("summary", ""))
         marker = MARKER[base]
         flags = flags_for(item["title"])
+        forced = (base == "🔴" and RED_RE.search(full)) or (base == "🟡" and YELLOW_RE.search(full))
         if is_oil_price(item["title"]):
             lead = "🛢️"          # قیمت نفت: فقط همین ایموجی
             if base == "🔵":
                 marker = "🔶"
+        elif forced:
+            lead = base + (" " + flags if flags else "")   # کلمه‌ی اجباری: ایموجی اول، بعدش پرچم
         elif flags:
             lead = flags          # اگه پرچم هست، ایموجی دسته‌بندی گذاشته نمی‌شه
         else:
@@ -695,32 +730,42 @@ def tg(method, files=None, **data):
     if PARSE_MODE[0] and method != "sendMediaGroup":
         data["parse_mode"] = PARSE_MODE[0]
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
-    r = requests.post(url, data=data, files=files, timeout=120)
-    if r.status_code == 429:  # محدودیت سرعت تلگرام: صبر و یک بار تلاش دوباره
-        try:
-            wait = int(r.json().get("parameters", {}).get("retry_after", 5))
-        except Exception:
-            wait = 5
-        time.sleep(min(wait, 30))
-        r = requests.post(url, data=data, files=files, timeout=120)
+    timeout = (10, 60 if files else 30)
+    try:
+        r = requests.post(url, data=data, files=files, timeout=timeout)
+        if r.status_code == 429:  # محدودیت سرعت تلگرام: صبر و یک بار تلاش دوباره
+            try:
+                wait = int(r.json().get("parameters", {}).get("retry_after", 5))
+            except Exception:
+                wait = 5
+            time.sleep(min(wait, 30))
+            r = requests.post(url, data=data, files=files, timeout=timeout)
+    except requests.RequestException as ex:   # قطعی/کندیِ شبکه نباید کل اجرا رو خراب کنه
+        print("  telegram network error:", method, type(ex).__name__)
+        if files:
+            UPLOAD_FAILS[0] += 1
+        return False
     if not r.ok:
         print("  telegram error:", method, r.status_code, r.text[:150])
     return r.ok
 
 
-def download(url, limit=45 * 1024 * 1024):
+def download(url, limit=30 * 1024 * 1024, max_seconds=60):
     try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=60, stream=True)
+        started = time.time()
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=(10, 30), stream=True)
         if not r.ok:
             return None
-        data = b""
-        for chunk in r.iter_content(1 << 20):
-            data += chunk
-            if len(data) > limit:
+        chunks, size = [], 0
+        for chunk in r.iter_content(1 << 18):
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > limit or time.time() - started > max_seconds:
+                print("  download skipped (too big or slow):", url[:70])
                 return None
-        return data
+        return b"".join(chunks)
     except Exception as ex:
-        print("  download error:", ex)
+        print("  download error:", type(ex).__name__)
         return None
 
 
@@ -734,55 +779,67 @@ def media_list(item):
     return []
 
 
-def send_single(kind, url, caption):
+def send_single(kind, url, caption, upload_first=False):
     method, field = ("sendVideo", "video") if kind == "video" else ("sendPhoto", "photo")
-    kw = {field: url}
-    if caption:
-        kw["caption"] = caption
-    if tg(method, **kw):
-        return True
-    data = download(url)  # اگه تلگرام نتونست لینک رو بگیره، خودمون دانلود و آپلود می‌کنیم
-    if data:
-        name = "file.mp4" if kind == "video" else "file.jpg"
-        return tg(method, files={field: (name, data)}, **({"caption": caption} if caption else {}))
+    cap = {"caption": caption} if caption else {}
+
+    def by_url():
+        return tg(method, **{field: url}, **cap)
+
+    def by_upload():   # خودمون دانلود و آپلود می‌کنیم
+        if UPLOAD_FAILS[0] >= 2:
+            return False
+        data = download(url)
+        if not data:
+            return False
+        return tg(method, files={field: ("file.mp4" if kind == "video" else "file.jpg", data)}, **cap)
+
+    for attempt in ((by_upload, by_url) if upload_first else (by_url, by_upload)):
+        if attempt():
+            return True
     return False
 
 
-def send_group(media, caption):
-    arr = []
-    for i, (k, u) in enumerate(media):
-        m = {"type": k, "media": u}
-        if i == 0 and caption:
+def send_group(media, caption, upload_first=False):
+    def first_caption(m, is_first):
+        if is_first and caption:
             m["caption"] = caption
             if PARSE_MODE[0]:
                 m["parse_mode"] = PARSE_MODE[0]
-        arr.append(m)
-    if tg("sendMediaGroup", media=json.dumps(arr)):
-        return True
-    files, arr = {}, []
-    for i, (k, u) in enumerate(media):
-        d = download(u)
-        if not d:
-            continue
-        fname = f"f{i}"
-        files[fname] = (fname + (".mp4" if k == "video" else ".jpg"), d)
-        m = {"type": k, "media": f"attach://{fname}"}
-        if not arr and caption:
-            m["caption"] = caption
-            if PARSE_MODE[0]:
-                m["parse_mode"] = PARSE_MODE[0]
-        arr.append(m)
-    if len(arr) >= 2:
-        return tg("sendMediaGroup", files=files, media=json.dumps(arr))
+        return m
+
+    def by_url():
+        arr = [first_caption({"type": k, "media": u}, i == 0) for i, (k, u) in enumerate(media)]
+        return tg("sendMediaGroup", media=json.dumps(arr))
+
+    def by_upload():
+        if UPLOAD_FAILS[0] >= 2:
+            return False
+        files, arr = {}, []
+        for i, (k, u) in enumerate(media):
+            d = download(u)
+            if not d:
+                continue
+            fname = f"f{i}"
+            files[fname] = (fname + (".mp4" if k == "video" else ".jpg"), d)
+            arr.append(first_caption({"type": k, "media": f"attach://{fname}"}, not arr))
+        if len(arr) >= 2:
+            return tg("sendMediaGroup", files=files, media=json.dumps(arr))
+        return False
+
+    for attempt in ((by_upload, by_url) if upload_first else (by_url, by_upload)):
+        if attempt():
+            return True
     return False
 
 
 def send(item):
     media = media_list(item)
     caption = build_text(item, max_len=1000)
-    if len(media) >= 2 and send_group(media, caption):
+    up = str(item.get("id", "")).startswith("tg:")   # تلگرام لینک عکس کانال‌ها رو نمی‌تونه بگیره؛ مستقیم آپلود
+    if len(media) >= 2 and send_group(media, caption, up):
         return True
-    if media and send_single(media[0][0], media[0][1], caption):
+    if media and send_single(media[0][0], media[0][1], caption, up):
         return True
     return tg("sendMessage", text=build_text(item), disable_web_page_preview="true")
 
@@ -793,11 +850,11 @@ def plain_of(h):
 
 def deliver(text, media):
     if media and len(text) > 1000:   # کپشن تلگرام حداکثر ۱۰۲۴ کاراکتره: اول عکس، بعد متن
-        ok = send_group(media, "") if len(media) >= 2 else send_single(media[0][0], media[0][1], "")
+        ok = send_group(media, "", True) if len(media) >= 2 else send_single(media[0][0], media[0][1], "", True)
         return ok and tg("sendMessage", text=text, disable_web_page_preview="true")
-    if len(media) >= 2 and send_group(media, text):
+    if len(media) >= 2 and send_group(media, text, True):
         return True
-    if media and send_single(media[0][0], media[0][1], text):
+    if media and send_single(media[0][0], media[0][1], text, True):
         return True
     if text:
         return tg("sendMessage", text=text, disable_web_page_preview="true")
@@ -805,18 +862,33 @@ def deliver(text, media):
 
 
 def send_special(text, media, proxy):
-    """متن (HTML) رو همون‌طور که هست می‌فرسته؛ در صورت نیاز فقط پروکسی به آخرش اضافه می‌شه."""
+    """متن (HTML) رو می‌فرسته. ته پیام: [پروکسی] و بعد آیدی کانال خودمون."""
     text = text.strip()
     p_html, p_plain = proxy_parts()
-    full = (text + "\n\n" if text else "") + p_html if proxy else text
-    if deliver(full, media):
+    if deliver("\n\n".join(x for x in (text, p_html if proxy else "", CHANNEL) if x), media):
         return True
     PARSE_MODE[0] = None   # اگه تلگرام فرمت HTML رو نپذیرفت، به‌صورت متن ساده
     try:
-        plain = plain_of(text) + (("\n\n" if text else "") + p_plain if proxy else "")
-        return deliver(plain, media)
+        parts = (plain_of(text), p_plain if proxy else "", CHANNEL)
+        return deliver("\n\n".join(x for x in parts if x), media)
     finally:
         PARSE_MODE[0] = "HTML"
+
+
+def strip_leading_emoji_html(h):
+    """ایموجی‌های اول متن رو برمی‌داره (حتی اگه توی تگ <b> و مانند اون باشه)."""
+    return re.sub(r"^((?:\s*<[^>]+>)*)(?:[" + EMOJI_CHARS + r"]|[\s\-\u2013\u2014\u2022\u00b7|])+", r"\1", h.strip())
+
+
+def drop_id_lines(h):
+    """خط‌هایی که فقط آیدی/لینک کیوسک هستن (امضای آخر پیام) حذف می‌شن."""
+    keep = []
+    for line in h.split("\n"):
+        plain = re.sub(r"<[^>]+>", "", line).strip()
+        if re.fullmatch(r"[\W_]*(?:@|(?:https?://)?(?:t|telegram)\.me/)" + KIOSK + r"[\W_]*", plain, re.I):
+            continue
+        keep.append(line)
+    return "\n".join(keep).strip()
 
 
 KIOSK_LINK_RE = re.compile(r"(?:https?://)?(?:t|telegram)\.me/" + KIOSK + r"[^\s<\"']*", re.I)
@@ -850,7 +922,9 @@ def run_special(kind, p, seen, ks):
         text, proxy = remove_hashtags(text), False   # هشتگ پاک می‌شه، بدون پروکسی
     else:
         proxy = True                                  # نگاه گذرا و روزنامه‌ها: + پروکسی
+    text = drop_id_lines(text)                              # امضای آخرِ کیوسک حذف می‌شه
     text = swap_channel(text, all_links=(kind == "summary"))
+    text = strip_leading_emoji_html(text)                   # اول متن ایموجی نباشه
     ok = send_special(text, p["media"], proxy)
     if ok:
         seen[p["id"]] = None
@@ -1002,26 +1076,32 @@ def main():
         to_post += chosen
         state["last_other"] = now
 
-    for kind, p in pre:
-        run_special(kind, p, seen, ks)
-        time.sleep(3)
+    started = time.time()
+    try:
+        for kind, p in pre:
+            run_special(kind, p, seen, ks)
+            time.sleep(3)
 
-    for item in sorted(to_post, key=lambda x: x["ts"]):
-        if send(item):
-            seen[item["id"]] = None
-            recent.append({"t": time.time(), "k": sorted(item["tok"])})
-            print("posted:", item["title"][:60])
-        time.sleep(3)
+        for item in sorted(to_post, key=lambda x: x["ts"]):
+            if time.time() - started > RUN_BUDGET_SEC:
+                print("زمان این اجرا تموم شد؛ بقیه‌ی خبرها نوبت بعد.")
+                break
+            if send(item):
+                seen[item["id"]] = None
+                recent.append({"t": time.time(), "k": sorted(item["tok"])})
+                print("posted:", item["title"][:60])
+            time.sleep(3)
 
-    for kind, p in post:
-        run_special(kind, p, seen, ks)
-
-    state["seen"] = list(seen)
-    state["seeded"] = list(seeded)
-    state["titles"] = recent[-400:]
-    state["kiosk"] = ks
-    save_state(state)
-
+        for kind, p in post:
+            run_special(kind, p, seen, ks)
+    except Exception as ex:   # هر خطایی بیاد، حافظه ذخیره می‌شه تا خبر تکراری نره
+        print("خطا در ارسال:", repr(ex))
+    finally:
+        state["seen"] = list(seen)
+        state["seeded"] = list(seeded)
+        state["titles"] = recent[-400:]
+        state["kiosk"] = ks
+        save_state(state)
 
 if __name__ == "__main__":
     main()
