@@ -328,9 +328,14 @@ def strip_leading_emoji(line):
     return LEAD_RE.sub("", line).strip()
 
 
-def is_blocked(text):
+# کلمه‌های ممنوع فقط برای یک کانال
+CHANNEL_BLOCKED = {"AloNews": ["عوستاد"]}
+
+
+def is_blocked(text, extra=()):
     key = re.sub(r"[\s\u200c]", "", text)
-    return any(w in key for w in BLOCKED_WORDS)
+    words = [re.sub(r"[\s\u200c]", "", w) for w in list(BLOCKED_WORDS) + list(extra)]
+    return any(w in key for w in words)
 
 
 def looks_like_joke(raw):
@@ -360,7 +365,7 @@ def detect_pricelist(lines):
     return None
 
 
-def parse_tg_page(page):
+def parse_tg_page(page, allow_media_only=False):
     """پست‌های صفحه‌ی عمومی کانال رو برمی‌گردونه (با bs4، یا بدون اون با regex)."""
     posts = []
     try:
@@ -380,36 +385,145 @@ def parse_tg_page(page):
         for box in soup.select("div.tgme_widget_message"):
             post_id = box.get("data-post")
             body = box.select_one(".js-message_text") or box.select_one(".tgme_widget_message_text")
-            if not post_id or not body:
+            if not post_id or (not body and not allow_media_only):
                 continue
-            for br in body.find_all("br"):
-                br.replace_with("\n")
+            if body:
+                for br in body.find_all("br"):
+                    br.replace_with("\n")
             photos = []
             for a in box.select("a.tgme_widget_message_photo_wrap"):
                 m = re.search(r"url\('([^']+)'\)", a.get("style", ""))
                 if m:
                     photos.append(m.group(1))
             videos = [v["src"] for v in box.select("video") if str(v.get("src", "")).startswith("http")]
+            media = [("photo", u) for u in uniq(photos)] + [("video", u) for u in uniq(videos)]
+            if not body and not media:
+                continue
             t = box.select_one("time")
-            posts.append({"post_id": post_id, "text": body.get_text(),
-                          "media": [("photo", u) for u in uniq(photos)] + [("video", u) for u in uniq(videos)],
+            posts.append({"post_id": post_id, "text": body.get_text() if body else "",
+                          "html": body.decode_contents() if body else "", "media": media,
                           "dt": t.get("datetime") if t else None})
     else:
         for blk in re.split(r'(?=<div class="tgme_widget_message_wrap)', page)[1:]:
             pid = re.search(r'data-post="([^"]+)"', blk)
             body = (re.search(r'<div class="tgme_widget_message_text[^"]*js-message_text[^"]*"[^>]*>(.*?)</div>', blk, re.S)
                     or re.search(r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', blk, re.S))
-            if not pid or not body:
+            if not pid or (not body and not allow_media_only):
                 continue
-            raw = re.sub(r"(?i)<br\s*/?>", "\n", body.group(1))
+            inner = body.group(1) if body else ""
+            raw = re.sub(r"(?i)<br\s*/?>", "\n", inner)
             text = html.unescape(re.sub(r"<[^>]+>", "", raw))
             photos = re.findall(r"tgme_widget_message_photo_wrap[^>]*style=\"[^\"]*url\('([^']+)'\)", blk)
             videos = [u for u in re.findall(r'<video[^>]+src="([^"]+)"', blk) if u.startswith("http")]
+            media = [("photo", u) for u in uniq(photos)] + [("video", u) for u in uniq(videos)]
+            if not body and not media:
+                continue
             dt = re.search(r'<time[^>]+datetime="([^"]+)"', blk)
-            posts.append({"post_id": pid.group(1), "text": text,
-                          "media": [("photo", u) for u in uniq(photos)] + [("video", u) for u in uniq(videos)],
+            posts.append({"post_id": pid.group(1), "text": text, "html": inner, "media": media,
                           "dt": dt.group(1) if dt else None})
     return posts
+
+
+# ====== کیوسک خبر (@kioskkhabar): فقط چند پیام مشخص ======
+KIOSK = "kioskkhabar"
+MORNING_FROM, MORNING_TO = 8 * 60 + 30, 13 * 60   # صبح بخیر و نگاه گذرا: ۰۸:۳۰ تا ۱۳:۰۰ تهران
+SUMMARY_WAIT_UNTIL = 10 * 60                        # نگاه گذرا تا ۱۰:۰۰ منتظر صبح بخیر می‌مونه
+NIGHT_FROM, NIGHT_END = 45, 100                     # شب بخیر: ۰۰:۴۵ تا ۰۱:۴۰ تهران
+PAPERS_MAX_AGE_H = 3                                # روزنامه‌ها: فقط تازه‌های ۳ ساعت اخیر
+
+
+def tehran_now():
+    return datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)
+
+
+def tg_safe_html(inner):
+    """HTML متن پست رو به فرمتی که تلگرام قبول می‌کنه تبدیل می‌کنه (بدون تغییر در محتوا)."""
+    h = re.sub(r'<i class="emoji"[^>]*><b>(.*?)</b></i>', r"\1", inner or "", flags=re.S)
+    h = re.sub(r"(?i)<br\s*/?>", "\n", h)
+
+    def fix_a(m):
+        href, txt = m.group(1), m.group(2)
+        if href.startswith(("http://", "https://", "tg://")):
+            return f'<a href="{href}">{txt}</a>'
+        return txt  # لینک هشتگ و لینک‌های نسبی: فقط متن
+
+    h = re.sub(r'<a\s[^>]*?href="([^"]*)"[^>]*>(.*?)</a>', fix_a, h, flags=re.S)
+    names = {"strong": "b", "em": "i", "ins": "u", "del": "s", "strike": "s"}
+
+    def tag(m):
+        closing, name = bool(m.group(1)), m.group(2).lower()
+        name = names.get(name, name)
+        if name in ("b", "i", "u", "s", "code", "pre"):
+            return f"</{name}>" if closing else f"<{name}>"
+        if name == "a":
+            return m.group(0)
+        return ""
+
+    h = re.sub(r"<(/?)([a-zA-Z][a-zA-Z0-9\-]*)([^>]*)>", tag, h)
+    return h.replace("&nbsp;", " ").strip()
+
+
+def remove_hashtags(h):
+    h = re.sub(r"#[\w\u0600-\u06FF\u200c]+", "", h)
+    out = []
+    for line in h.split("\n"):
+        line = re.sub(r"[ \t]{2,}", " ", line).strip()
+        if not line and (not out or not out[-1]):
+            continue
+        out.append(line)
+    while out and not out[-1]:
+        out.pop()
+    return "\n".join(out)
+
+
+def kiosk_kind(p):
+    key = re.sub(r"[\s\u200c_]+", "", p["text"])
+    photos = [m for m in p["media"] if m[0] == "photo"]
+    if "نگاهیگذرا" in key:
+        return "summary"
+    if "شببخیر" in key:
+        return "night"
+    if "صبحبخیر" in key:
+        return "morning"
+    if len(photos) >= 3 and any(w in key for w in ("روزنامه", "صفحهاول", "پیشخوان")):
+        return "papers"
+    return None
+
+
+def fetch_kiosk(pages):
+    out = []
+    url = f"https://t.me/s/{KIOSK}"
+    for _ in range(pages):
+        try:
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        except Exception as ex:
+            print("kiosk error:", ex)
+            break
+        ps = parse_tg_page(r.text, allow_media_only=True)
+        print(f"kiosk http={r.status_code} posts={len(ps)}")
+        if not ps:
+            break
+        ids = []
+        for p in ps:
+            p["ts"] = 0
+            if p["dt"]:
+                try:
+                    p["ts"] = datetime.fromisoformat(p["dt"]).timestamp()
+                except ValueError:
+                    pass
+            p["id"] = "tg:" + p["post_id"]
+            p["sp"] = kiosk_kind(p)
+            p["html"] = tg_safe_html(p["html"])
+            try:
+                ids.append(int(p["post_id"].rsplit("/", 1)[1]))
+            except (ValueError, IndexError):
+                pass
+        out += ps
+        stamps = [p["ts"] for p in ps if p["ts"]]
+        if (stamps and time.time() - min(stamps) > 15 * 3600) or not ids:
+            break
+        url = f"https://t.me/s/{KIOSK}?before={min(ids)}"
+    return out
 
 
 def fetch_tg(category, name, domestic):
@@ -422,7 +536,7 @@ def fetch_tg(category, name, domestic):
             print(f"  ! هیچ پستی خونده نشد: پیش‌نمایش عمومی کانال بسته‌ست یا دسترسی بلاکه (آیدی: {name})")
         for p in posts:
             raw = p["text"]
-            if is_blocked(raw):
+            if is_blocked(raw, CHANNEL_BLOCKED.get(name, ())):
                 print("  blocked word, skipped:", raw[:40].replace("\n", " "))
                 continue
             if name in JOKE_CHANNELS and looks_like_joke(raw):
@@ -504,25 +618,36 @@ def proxy_alive(link):
     try:
         q = parse_qs(urlparse(link).query)
         host, port = q["server"][0], int(q["port"][0])
-        with socket.create_connection((host, port), timeout=4):
+        with socket.create_connection((host, port), timeout=3):
             return True
     except Exception:
         return False
 
 
-def prepare_proxies(want=10, max_checks=60):
+def prepare_proxies(want=15, max_checks=80):
+    """پروکسی‌ها رو هم‌زمان چک می‌کنه (سریع، تا ساعت‌های رایگان گیت‌هاب هدر نره)."""
+    from concurrent.futures import ThreadPoolExecutor
     links = load_proxies()
     random.shuffle(links)
-    for link in links[:max_checks]:
-        if proxy_alive(link):
-            ALIVE.append(link)
-            if len(ALIVE) >= want:
-                break
-    print(f"proxies: {len(links)} in file, {len(ALIVE)} alive")
+    sample = links[:max_checks]
+    if sample:
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            ok = list(ex.map(proxy_alive, sample))
+        ALIVE.extend([l for l, good in zip(sample, ok) if good][:want])
+    print(f"proxies: {len(links)} in file, {len(sample)} checked, {len(ALIVE)} alive")
 
 
 # ====== ارسال ======
+PARSE_MODE = ["HTML"]
 MARKER = {"🔴": "🔻", "🟡": "🔶", "🔵": "🔷"}
+
+
+def proxy_parts():
+    """(نسخه‌ی HTML, نسخه‌ی ساده) خط پروکسی."""
+    link = random.choice(ALIVE) if ALIVE else PROXY_LINK
+    if link:
+        return f'<a href="{html.escape(link, quote=True)}">پروکسی</a>😉', f"پروکسی😉 {link}"
+    return "پروکسی😉", "پروکسی😉"
 
 
 def build_text(item, max_len=4000):
@@ -546,12 +671,7 @@ def build_text(item, max_len=4000):
             lead = base
     first = f"{lead} <b>{esc(item['title'])}</b>"
 
-    link = random.choice(ALIVE) if ALIVE else PROXY_LINK
-    if link:
-        proxy = f'<a href="{html.escape(link, quote=True)}">پروکسی</a>😉'
-    else:
-        proxy = "پروکسی😉"
-    tail = [proxy, CHANNEL]
+    tail = [proxy_parts()[0], CHANNEL]
 
     paras = list(item.get("paras") or [])
     mark = (not kind) and len(paras) >= 2   # فقط خبرِ چندپاراگرافی علامت می‌گیره
@@ -572,8 +692,8 @@ def build_text(item, max_len=4000):
 
 def tg(method, files=None, **data):
     data["chat_id"] = CHANNEL
-    if method != "sendMediaGroup":
-        data["parse_mode"] = "HTML"
+    if PARSE_MODE[0] and method != "sendMediaGroup":
+        data["parse_mode"] = PARSE_MODE[0]
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
     r = requests.post(url, data=data, files=files, timeout=120)
     if r.status_code == 429:  # محدودیت سرعت تلگرام: صبر و یک بار تلاش دوباره
@@ -616,12 +736,15 @@ def media_list(item):
 
 def send_single(kind, url, caption):
     method, field = ("sendVideo", "video") if kind == "video" else ("sendPhoto", "photo")
-    if tg(method, caption=caption, **{field: url}):
+    kw = {field: url}
+    if caption:
+        kw["caption"] = caption
+    if tg(method, **kw):
         return True
     data = download(url)  # اگه تلگرام نتونست لینک رو بگیره، خودمون دانلود و آپلود می‌کنیم
     if data:
         name = "file.mp4" if kind == "video" else "file.jpg"
-        return tg(method, files={field: (name, data)}, caption=caption)
+        return tg(method, files={field: (name, data)}, **({"caption": caption} if caption else {}))
     return False
 
 
@@ -629,8 +752,10 @@ def send_group(media, caption):
     arr = []
     for i, (k, u) in enumerate(media):
         m = {"type": k, "media": u}
-        if i == 0:
-            m.update({"caption": caption, "parse_mode": "HTML"})
+        if i == 0 and caption:
+            m["caption"] = caption
+            if PARSE_MODE[0]:
+                m["parse_mode"] = PARSE_MODE[0]
         arr.append(m)
     if tg("sendMediaGroup", media=json.dumps(arr)):
         return True
@@ -642,8 +767,10 @@ def send_group(media, caption):
         fname = f"f{i}"
         files[fname] = (fname + (".mp4" if k == "video" else ".jpg"), d)
         m = {"type": k, "media": f"attach://{fname}"}
-        if not arr:
-            m.update({"caption": caption, "parse_mode": "HTML"})
+        if not arr and caption:
+            m["caption"] = caption
+            if PARSE_MODE[0]:
+                m["parse_mode"] = PARSE_MODE[0]
         arr.append(m)
     if len(arr) >= 2:
         return tg("sendMediaGroup", files=files, media=json.dumps(arr))
@@ -658,6 +785,79 @@ def send(item):
     if media and send_single(media[0][0], media[0][1], caption):
         return True
     return tg("sendMessage", text=build_text(item), disable_web_page_preview="true")
+
+
+def plain_of(h):
+    return html.unescape(re.sub(r"<[^>]+>", "", h))
+
+
+def deliver(text, media):
+    if media and len(text) > 1000:   # کپشن تلگرام حداکثر ۱۰۲۴ کاراکتره: اول عکس، بعد متن
+        ok = send_group(media, "") if len(media) >= 2 else send_single(media[0][0], media[0][1], "")
+        return ok and tg("sendMessage", text=text, disable_web_page_preview="true")
+    if len(media) >= 2 and send_group(media, text):
+        return True
+    if media and send_single(media[0][0], media[0][1], text):
+        return True
+    if text:
+        return tg("sendMessage", text=text, disable_web_page_preview="true")
+    return False
+
+
+def send_special(text, media, proxy):
+    """متن (HTML) رو همون‌طور که هست می‌فرسته؛ در صورت نیاز فقط پروکسی به آخرش اضافه می‌شه."""
+    text = text.strip()
+    p_html, p_plain = proxy_parts()
+    full = (text + "\n\n" if text else "") + p_html if proxy else text
+    if deliver(full, media):
+        return True
+    PARSE_MODE[0] = None   # اگه تلگرام فرمت HTML رو نپذیرفت، به‌صورت متن ساده
+    try:
+        plain = plain_of(text) + (("\n\n" if text else "") + p_plain if proxy else "")
+        return deliver(plain, media)
+    finally:
+        PARSE_MODE[0] = "HTML"
+
+
+KIOSK_LINK_RE = re.compile(r"(?:https?://)?(?:t|telegram)\.me/" + KIOSK + r"[^\s<\"']*", re.I)
+ANY_LINK_RE = re.compile(r"https?://[^\s<\"']+|(?:t|telegram)\.me/[^\s<\"']+", re.I)
+
+
+def swap_channel(h, all_links=False):
+    """آیدی و لینک کانال کیوسک رو با آیدی و لینک کانال خودمون عوض می‌کنه.
+    all_links=True (برای «نگاه گذرا»): همه‌ی لینک‌ها به لینک کانال خودمون تبدیل می‌شن."""
+    own_link = "https://t.me/" + CHANNEL.lstrip("@")
+    link_re = ANY_LINK_RE if all_links else KIOSK_LINK_RE
+    out = []
+    for part in re.split(r"(<[^>]+>)", h):
+        if part.startswith("<a "):
+            m = re.search(r'href="([^"]*)"', part)
+            if m and (all_links or KIOSK_LINK_RE.search(m.group(1))):
+                part = f'<a href="{own_link}">'
+            out.append(part)
+        elif part.startswith("<"):
+            out.append(part)
+        else:
+            part = link_re.sub(own_link, part)
+            part = re.sub("@" + re.escape(KIOSK) + r"(?![A-Za-z0-9_])", CHANNEL, part, flags=re.I)
+            out.append(part)
+    return "".join(out)
+
+
+def run_special(kind, p, seen, ks):
+    text = p["html"]
+    if kind in ("morning", "night"):
+        text, proxy = remove_hashtags(text), False   # هشتگ پاک می‌شه، بدون پروکسی
+    else:
+        proxy = True                                  # نگاه گذرا و روزنامه‌ها: + پروکسی
+    text = swap_channel(text, all_links=(kind == "summary"))
+    ok = send_special(text, p["media"], proxy)
+    if ok:
+        seen[p["id"]] = None
+        if kind in ks:
+            ks[kind] = True
+        print("kiosk posted:", kind, p["post_id"])
+    return ok
 
 
 def collect(feeds, seen, seeded, seed_n):
@@ -703,7 +903,7 @@ def choose(cands, limit, seen, recent_sets, kept_sets):
 
 
 def is_quiet_hours():
-    t = datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)  # وقت تهران
+    t = tehran_now()
     m = t.hour * 60 + t.minute
     return QUIET_START <= m < QUIET_END
 
@@ -711,14 +911,31 @@ def is_quiet_hours():
 def main():
     state = load_state()
     now = time.time()
-    force = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"  # اجرای دستی: همه‌چیز
+    # اجرای دستی از دکمه‌ی Run workflow: همه‌چیز؛ اجرای خودکار (mode=auto) طبق زمان‌بندی
+    force = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and os.environ.get("RUN_MODE", "manual") != "auto"
+    th = tehran_now()
+    m = th.hour * 60 + th.minute
+    day_id = (th - timedelta(hours=8)).strftime("%Y-%m-%d")   # «روز» کانال: ۰۸:۳۰ تا ۰۱:۰۰ بعد
+    ks = state.get("kiosk") or {}
+    if ks.get("day") != day_id:
+        ks = {"day": day_id, "morning": False, "summary": False, "night": False}
+
+    only_night = False
     if not force and is_quiet_hours():
-        print("ساعت سکوته (۰۱:۰۰ تا ۰۸:۳۰ تهران)؛ خبری منتشر نمی‌شه.")
-        return
-    run_tg = force or now - state.get("last_tg", 0) >= (TG_EVERY_MIN - SLACK_MIN) * 60
-    run_other = force or now - state.get("last_other", 0) >= (OTHER_EVERY_MIN - SLACK_MIN) * 60
-    if not (run_tg or run_other):
-        print("هنوز موقع اجرا نیست.")
+        if m < NIGHT_END and not ks["night"]:
+            only_night = True   # اجرا دیر شروع شده؛ فقط پیام «شب بخیر» فرستاده می‌شه
+        else:
+            print("ساعت سکوته (۰۱:۰۰ تا ۰۸:۳۰ تهران)؛ خبری منتشر نمی‌شه.")
+            return
+
+    run_tg = not only_night and (force or now - state.get("last_tg", 0) >= (TG_EVERY_MIN - SLACK_MIN) * 60)
+    run_other = not only_night and (force or now - state.get("last_other", 0) >= (OTHER_EVERY_MIN - SLACK_MIN) * 60)
+
+    print(f"run: event={os.environ.get('GITHUB_EVENT_NAME')} mode={os.environ.get('RUN_MODE')} "
+          f"tehran={th:%H:%M} force={force} run_tg={run_tg} run_other={run_other} only_night={only_night}")
+    if not (run_tg or run_other or only_night):
+        since = (now - state.get("last_tg", 0)) / 60
+        print(f"هنوز موقع اجرا نیست ({since:.0f} دقیقه از آخرین نوبت کانال‌ها گذشته).")
         return
 
     prepare_proxies()
@@ -728,13 +945,48 @@ def main():
     recent_sets = [set(t["k"]) for t in recent]
     kept_sets, to_post = [], []
 
+    # ---- کیوسک خبر: فقط پیام‌های مشخص
+    pre, post = [], []
+    morning_time = MORNING_FROM <= m < MORNING_TO
+    night_time = NIGHT_FROM <= m < NIGHT_END
+    pending_morning = morning_time and not (ks["morning"] and ks["summary"])
+    kposts = []
+    try:
+        kposts = fetch_kiosk(8 if pending_morning else 3 if night_time else 2)
+    except Exception as ex:
+        print("kiosk error:", ex)
+
+    def pick(kind, max_hours):
+        c = [p for p in kposts if p["sp"] == kind and p["id"] not in seen and now - p["ts"] <= max_hours * 3600]
+        return max(c, key=lambda x: x["ts"]) if c else None
+
+    if not only_night:
+        if morning_time and not ks["morning"]:
+            p = pick("morning", 14)
+            if p:
+                pre.append(("morning", p))
+        if morning_time and not ks["summary"]:
+            p = pick("summary", 14)
+            if p and (ks["morning"] or pre or m >= SUMMARY_WAIT_UNTIL):
+                pre.append(("summary", p))
+        for p in sorted([p for p in kposts if p["sp"] == "papers" and p["id"] not in seen
+                         and now - p["ts"] <= PAPERS_MAX_AGE_H * 3600], key=lambda x: x["ts"]):
+            pre.append(("papers", p))
+    if night_time and not ks["night"]:
+        p = pick("night", 6)
+        if p:
+            post.append(("night", p))
+
+    # ---- بقیه‌ی منابع
     tg_feeds = [f for f in FEEDS if f[1].startswith("tg:")]
     other_feeds = [f for f in FEEDS if not f[1].startswith("tg:")]
 
     if run_tg:
         cands = collect(tg_feeds, seen, seeded, seed_n=TG_MAX_POSTS)
         n = random.randint(TG_MIN_POSTS, TG_MAX_POSTS)
-        to_post += choose(cands, n, seen, recent_sets, kept_sets)
+        chosen = choose(cands, n, seen, recent_sets, kept_sets)
+        print(f"کانال‌های تلگرامی: {len(cands)} خبر تازه، {len(chosen)} تا انتخاب شد (سقف {n})")
+        to_post += chosen
         state["last_tg"] = now
 
     if run_other:
@@ -745,8 +997,14 @@ def main():
             if i not in keep_dom:
                 seen[i["id"]] = None
         pool = [i for i in cands if not i["domestic"]] + keep_dom
-        to_post += choose(pool, OTHER_MAX_POSTS, seen, recent_sets, kept_sets)
+        chosen = choose(pool, OTHER_MAX_POSTS, seen, recent_sets, kept_sets)
+        print(f"بقیه‌ی منابع: {len(pool)} خبر تازه، {len(chosen)} تا انتخاب شد")
+        to_post += chosen
         state["last_other"] = now
+
+    for kind, p in pre:
+        run_special(kind, p, seen, ks)
+        time.sleep(3)
 
     for item in sorted(to_post, key=lambda x: x["ts"]):
         if send(item):
@@ -755,9 +1013,13 @@ def main():
             print("posted:", item["title"][:60])
         time.sleep(3)
 
+    for kind, p in post:
+        run_special(kind, p, seen, ks)
+
     state["seen"] = list(seen)
     state["seeded"] = list(seeded)
     state["titles"] = recent[-400:]
+    state["kiosk"] = ks
     save_state(state)
 
 
