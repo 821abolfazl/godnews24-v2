@@ -657,6 +657,7 @@ def proxy_alive(link):
 def prepare_proxies(want=15, max_checks=80):
     """پروکسی‌ها رو هم‌زمان چک می‌کنه (سریع، تا ساعت‌های رایگان گیت‌هاب هدر نره)."""
     from concurrent.futures import ThreadPoolExecutor
+    ALIVE.clear()
     links = load_proxies()
     random.shuffle(links)
     sample = links[:max_checks]
@@ -982,7 +983,8 @@ def is_quiet_hours():
     return QUIET_START <= m < QUIET_END
 
 
-def main():
+def run_once():
+    UPLOAD_FAILS[0] = 0
     state = load_state()
     now = time.time()
     # اجرای دستی از دکمه‌ی Run workflow: همه‌چیز؛ اجرای خودکار (mode=auto) طبق زمان‌بندی
@@ -1000,7 +1002,7 @@ def main():
             only_night = True   # اجرا دیر شروع شده؛ فقط پیام «شب بخیر» فرستاده می‌شه
         else:
             print("ساعت سکوته (۰۱:۰۰ تا ۰۸:۳۰ تهران)؛ خبری منتشر نمی‌شه.")
-            return
+            return "quiet"
 
     run_tg = not only_night and (force or now - state.get("last_tg", 0) >= (TG_EVERY_MIN - SLACK_MIN) * 60)
     run_other = not only_night and (force or now - state.get("last_other", 0) >= (OTHER_EVERY_MIN - SLACK_MIN) * 60)
@@ -1010,7 +1012,7 @@ def main():
     if not (run_tg or run_other or only_night):
         since = (now - state.get("last_tg", 0)) / 60
         print(f"هنوز موقع اجرا نیست ({since:.0f} دقیقه از آخرین نوبت کانال‌ها گذشته).")
-        return
+        return "notdue"
 
     prepare_proxies()
     seen = dict.fromkeys(state["seen"])   # ترتیب حفظ می‌شه
@@ -1102,6 +1104,79 @@ def main():
         state["titles"] = recent[-400:]
         state["kiosk"] = ks
         save_state(state)
+
+# ====== حالت حلقه: یک اجرای طولانی که هر ۲۰ دقیقه یک‌بار خبر می‌ذاره ======
+LOOP_MINUTES = int(os.environ.get("LOOP_MINUTES") or 0)
+
+
+def is_force_run():
+    return os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and os.environ.get("RUN_MODE", "manual") != "auto"
+
+
+def repo_is_public():
+    """حلقه فقط برای repository عمومی روشن می‌شه (برای خصوصی ساعت‌های رایگان رو تموم می‌کنه)."""
+    repo, tok = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
+    if not repo:
+        return False
+    try:
+        r = requests.get(f"https://api.github.com/repos/{repo}",
+                         headers={"Authorization": f"Bearer {tok}"} if tok else {}, timeout=15)
+        return r.status_code == 200 and r.json().get("private") is False
+    except Exception:
+        return False
+
+
+def commit_state():
+    """بعد از هر دور، حافظه رو توی گیت‌هاب ذخیره می‌کنه (اگه اجرا وسط کار قطع شد، خبر تکراری نره)."""
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", *args], capture_output=True, text=True)
+
+    try:
+        git("config", "user.name", "news-bot")
+        git("config", "user.email", "bot@users.noreply.github.com")
+        git("add", STATE_FILE)
+        if git("diff", "--cached", "--quiet").returncode != 0:
+            git("commit", "-m", "update posted")
+            r = git("push")
+            if r.returncode != 0:
+                print("git push failed:", r.stderr[:200])
+    except Exception as ex:
+        print("commit error:", repr(ex))
+
+
+def main():
+    loop_minutes = LOOP_MINUTES
+    if loop_minutes > 0 and (is_force_run() or not repo_is_public()):
+        if not is_force_run():
+            print("repository عمومی نیست؛ حالت حلقه خاموش شد (برای حفظ ساعت‌های رایگان).")
+        loop_minutes = 0
+    if loop_minutes <= 0:
+        run_once()
+        return
+    end = time.time() + loop_minutes * 60
+    while True:
+        t0 = time.time()
+        status = None
+        try:
+            status = run_once()
+        except Exception as ex:
+            print("خطا در این دور:", repr(ex))
+        commit_state()
+        if status == "quiet":
+            print("ساعت سکوت شد؛ حلقه تموم می‌شه.")
+            break
+        nxt = t0 + TG_EVERY_MIN * 60
+        if nxt + 60 > end:
+            break
+        wait = nxt - time.time()
+        print(f"دور بعدی تا {wait / 60:.0f} دقیقه‌ی دیگه.")
+        if wait > 0:
+            time.sleep(wait)
+
 
 if __name__ == "__main__":
     main()
