@@ -2,15 +2,25 @@ name: GodNews24 Bot
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "7,27,47 5-20 * * *"
+    - cron: "7,27 21 * * *"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "manual or auto"
+        default: "manual"
 
 permissions:
   contents: write
 
+concurrency:
+  group: godnews-bot
+  cancel-in-progress: false
+
 jobs:
   post-news:
     runs-on: ubuntu-latest
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
 
@@ -18,15 +28,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install feedparser requests
+      - run: pip install -q feedparser requests beautifulsoup4
 
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          RUN_MODE: ${{ github.event.inputs.mode }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOOP_MINUTES: ${{ vars.LOOP_MINUTES }}
           CHANNEL: "@GodNews24"
         run: python bot.py
 
       - name: Save state
+        if: always()
         run: |
           git config user.name "news-bot"
           git config user.email "bot@users.noreply.github.com"
