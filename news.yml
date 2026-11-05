@@ -1,12 +1,16 @@
 name: GodNews24 Bot
 
 on:
+  # اجرای اصلی: یک سرویس زمان‌بندی بیرونی (cron-job.org) هر ۲۰ دقیقه این workflow رو صدا می‌زنه
+  # (با mode=auto). زمان‌بندی خودِ گیت‌هاب دقیق نیست، پس اینجا فقط یک پشتیبانِ کم‌تکرار گذاشتم:
+  # هر ۲ ساعت، دقیقه‌ی ۱۷ (به UTC؛ تهران = UTC+3:30)
   schedule:
-    # ساعت‌ها به UTC هستن؛ تهران = UTC+3:30
-    # ۰۵:۰۰ تا ۲۱:۲۰ UTC  =  ۰۸:۳۰ تا ۰۰:۵۰ تهران
-    - cron: "*/20 5-20 * * *"
-    - cron: "0,20 21 * * *"
+    - cron: "17 5,7,9,11,13,15,17,19,21 * * *"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "manual = اجرای کامل دستی / auto = اجرای زمان‌بندی‌شده"
+        default: "manual"
 
 permissions:
   contents: write
@@ -18,6 +22,7 @@ concurrency:
 jobs:
   post-news:
     runs-on: ubuntu-latest
+    timeout-minutes: 8   # اگه یه اجرا گیر کرد، ساعت‌های رایگان هدر نره
     steps:
       - uses: actions/checkout@v4
 
@@ -25,11 +30,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install feedparser requests beautifulsoup4
+      - run: pip install -q feedparser requests beautifulsoup4
 
       - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          RUN_MODE: ${{ github.event.inputs.mode }}
           CHANNEL: "@GodNews24"
         run: python bot.py
 
