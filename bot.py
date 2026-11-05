@@ -97,7 +97,7 @@ def pick_emoji(category, title, body=""):
 
 
 # ====== حذف منبع از متن ======
-SRC = (r"(?:ایسنا|مهر|ایرنا|تسنیم|فارس|مشرق|تابناک|خبرآنلاین|خبر\s?آنلاین|همشهری|ایلنا|ایکنا|"
+SRC = (r"(?:صابرین\s?نیوز|المیادین|نیویورک\s?تایمز|آکسیوس|فاکس\s?نیوز|سی\s?بی\s?اس|وال\s?استریت(?:\s?ژورنال)?|فایننشال\s?تایمز|اینترفکس|العربیه|الجزیره|الجزایر|کانال\s?(?:۱۴|14)(?:\s?اسرائیل)?|ایسنا|مهر|ایرنا|تسنیم|فارس|مشرق|تابناک|خبرآنلاین|خبر\s?آنلاین|همشهری|ایلنا|ایکنا|"
        r"جماران|انتخاب|عصر\s?ایران|یورونیوز|دویچه[\s‌]?وله|DW|ورزش\s?(?:۳|3|سه)|دیجیاتو|زومیت|"
        r"دنیای\s?اقتصاد|اقتصادنیوز|اکوایران|تجارت\s?نیوز|باشگاه\s?خبرنگاران(?:\s?جوان)?|"
        r"خبرگزاری\s?صدا\s?و\s?سیما|BBC|رویترز|AFP|آسوشیتدپرس|AP)")
@@ -157,68 +157,201 @@ def is_oil_price(title):
     return has_oil and has_price
 
 
+_L = "\u0600-\u06FF\u200c"
+
+
+def rx(*alts, suffix=True):
+    """عبارت‌های فارسی رو با مرز کلمه (و پسوندهای ی، ها، ان) تطبیق می‌ده؛ مثلاً «جنگل» جنگ حساب نمی‌شه."""
+    pat = "|".join(alts)
+    sfx = r"(?:\u200c?(?:های|ها|یی|ایی|ای|ی|یان|ان))?" if suffix else ""
+    return re.compile(rf"(?<![{_L}])(?:{pat}){sfx}(?![{_L}])", re.I)
+
+
 COUNTRIES = {
-    "IR": ["ایران"], "US": ["آمریکا", "امریکا", "ایالات متحده"], "RU": ["روسیه"],
-    "CN": ["چین"], "IL": ["اسرائیل"], "IQ": ["عراق"], "TR": ["ترکیه"],
-    "SA": ["عربستان"], "AE": ["امارات"], "QA": ["قطر"], "KW": ["کویت"],
-    "BH": ["بحرین"], "OM": ["عمان"], "LB": ["لبنان"], "SY": ["سوریه"],
-    "YE": ["یمن"], "PS": ["فلسطین"], "JO": ["اردن"], "EG": ["مصر"],
-    "LY": ["لیبی"], "DZ": ["الجزایر"], "MA": ["مراکش"], "TN": ["تونس"],
-    "SD": ["سودان"], "AF": ["افغانستان"], "PK": ["پاکستان"], "IN": ["هند"],
-    "BD": ["بنگلادش"], "JP": ["ژاپن"], "KR": ["کره جنوبی"], "KP": ["کره شمالی"],
-    "TW": ["تایوان"], "VN": ["ویتنام"], "ID": ["اندونزی"], "MY": ["مالزی"],
+    "IR": ["ایران"], "US": ["آمریکا", "امریکا", "ایالات متحده", "واشنگتن", "پنتاگون", "کاخ سفید"],
+    "RU": ["روسیه", "روس", "مسکو", "کرملین"], "CN": ["چین", "پکن"],
+    "IL": ["اسرائیل", "اسراییل", "تل آویو", "تل‌آویو"], "IQ": ["عراق", "بغداد"],
+    "TR": ["ترکیه", "آنکارا"], "SA": ["عربستان", "ریاض"], "AE": ["امارات", "ابوظبی", "دبی"],
+    "QA": ["قطر", "دوحه"], "KW": ["کویت"], "BH": ["بحرین", "منامه"], "OM": ["عمان", "مسقط"],
+    "LB": ["لبنان", "بیروت"], "SY": ["سوریه", "دمشق"], "YE": ["یمن", "صنعا"],
+    "PS": ["فلسطین", "غزه", "کرانه باختری"], "JO": ["اردن"], "EG": ["مصر", "قاهره"],
+    "LY": ["لیبی"], "DZ": ["الجزایر"], "MA": ["مراکش"], "TN": ["تونس"], "SD": ["سودان"],
+    "AF": ["افغانستان", "کابل"], "PK": ["پاکستان", "اسلام آباد", "اسلام‌آباد"],
+    "IN": ["هند", "دهلی نو", "دهلی"], "BD": ["بنگلادش"], "JP": ["ژاپن", "توکیو"],
+    "KR": ["کره جنوبی", "سئول"], "KP": ["کره شمالی", "پیونگ یانگ", "پیونگ‌یانگ"],
+    "TW": ["تایوان", "تایپه"], "VN": ["ویتنام"], "ID": ["اندونزی"], "MY": ["مالزی"],
     "TH": ["تایلند"], "PH": ["فیلیپین"], "SG": ["سنگاپور"], "AU": ["استرالیا"],
     "NZ": ["نیوزیلند"], "CA": ["کانادا"], "MX": ["مکزیک"], "BR": ["برزیل"],
-    "AR": ["آرژانتین"], "VE": ["ونزوئلا"], "CU": ["کوبا"], "CO": ["کلمبیا"],
-    "CL": ["شیلی"], "DE": ["آلمان"], "FR": ["فرانسه"],
-    "GB": ["انگلیس", "انگلستان", "بریتانیا"], "IT": ["ایتالیا"], "ES": ["اسپانیا"],
-    "PT": ["پرتغال"], "NL": ["هلند"], "BE": ["بلژیک"], "CH": ["سوئیس"],
-    "AT": ["اتریش"], "SE": ["سوئد"], "NO": ["نروژ"], "DK": ["دانمارک"],
-    "FI": ["فنلاند"], "PL": ["لهستان"], "UA": ["اوکراین"], "BY": ["بلاروس"],
-    "RO": ["رومانی"], "HU": ["مجارستان"], "GR": ["یونان"], "RS": ["صربستان"],
-    "AM": ["ارمنستان"], "AZ": ["جمهوری آذربایجان", "آذربایجان"], "GE": ["گرجستان"],
-    "KZ": ["قزاقستان"], "UZ": ["ازبکستان"], "TM": ["ترکمنستان"],
-    "TJ": ["تاجیکستان"], "KG": ["قرقیزستان"], "ZA": ["آفریقای جنوبی"],
-    "NG": ["نیجریه"], "ET": ["اتیوپی"], "KE": ["کنیا"], "IE": ["ایرلند"],
-    "NP": ["نپال"], "LK": ["سریلانکا"], "MM": ["میانمار"], "KH": ["کامبوج"],
-    "CY": ["قبرس"], "BG": ["بلغارستان"], "HR": ["کرواسی"], "PA": ["پاناما"], "EU": ["اتحادیه اروپا", "اروپا"],
+    "AR": ["آرژانتین"], "VE": ["ونزوئلا", "کاراکاس"], "CU": ["کوبا", "هاوانا"],
+    "CO": ["کلمبیا"], "CL": ["شیلی"], "DE": ["آلمان", "برلین"],
+    "FR": ["فرانسه", "فرانسوی", "پاریس"], "GB": ["انگلیس", "انگلستان", "بریتانیا", "لندن"],
+    "IT": ["ایتالیا"], "ES": ["اسپانیا", "مادرید"], "PT": ["پرتغال"], "NL": ["هلند"],
+    "BE": ["بلژیک"], "CH": ["سوئیس"], "AT": ["اتریش"], "SE": ["سوئد"], "NO": ["نروژ"],
+    "DK": ["دانمارک"], "FI": ["فنلاند"], "PL": ["لهستان", "ورشو"],
+    "UA": ["اوکراین", "کی یف", "کی‌یف", "کییف"], "BY": ["بلاروس"], "RO": ["رومانی"],
+    "HU": ["مجارستان"], "GR": ["یونان"], "RS": ["صربستان"], "AM": ["ارمنستان"],
+    "AZ": ["جمهوری آذربایجان", "آذربایجان"], "GE": ["گرجستان"], "KZ": ["قزاقستان"],
+    "UZ": ["ازبکستان"], "TM": ["ترکمنستان"], "TJ": ["تاجیکستان"], "KG": ["قرقیزستان"],
+    "ZA": ["آفریقای جنوبی"], "NG": ["نیجریه"], "ET": ["اتیوپی"], "KE": ["کنیا"],
+    "SO": ["سومالی"], "IE": ["ایرلند"], "IS": ["ایسلند"], "NP": ["نپال"],
+    "LK": ["سریلانکا"], "MM": ["میانمار"], "KH": ["کامبوج"], "CY": ["قبرس"],
+    "BG": ["بلغارستان"], "HR": ["کرواسی"], "PA": ["پاناما"], "SK": ["اسلواکی"],
+    "SI": ["اسلوونی"], "LT": ["لیتوانی"], "LV": ["لتونی"], "EE": ["استونی"],
+    "MN": ["مغولستان"], "LA": ["لائوس"],
 }
-_L = "\u0600-\u06FF\u200c"
 COUNTRY_RE = []
 for _code, _names in COUNTRIES.items():
-    _alt = "|".join(re.escape(n) for n in sorted(_names, key=len, reverse=True))
-    COUNTRY_RE.append((_code, re.compile(
-        rf"(?<![{_L}])(?:{_alt})(?:\u200c?(?:های|ها|یی|ایی|ای|ی)){{0,2}}(?![{_L}])")))
-NOT_COUNTRY = ["ایران خودرو", "ایران‌خودرو", "ایرانخودرو", "دریای عمان", "اقیانوس هند", "آذربایجان شرقی", "آذربایجان غربی",
-               "خلیج فارس", "تنگه هرمز"]
+    _alt = [r"[\s\u200c]*".join(re.escape(w) for w in n.split()) for n in sorted(_names, key=len, reverse=True)]
+    COUNTRY_RE.append((_code, rx(*_alt)))
+EU_RE = rx("اتحادیه[\\s\u200c]*اروپا", "اروپا")
+NOT_COUNTRY = ["ایران خودرو", "ایران‌خودرو", "ایرانخودرو", "دریای عمان", "اقیانوس هند",
+               "آذربایجان شرقی", "آذربایجان غربی", "خلیج فارس", "تنگه هرمز", "روس‌تا"]
+FLAG_FILLERS = {"فوری", "عاجل", "خبر", "آخرین", "مهم", "جدید", "اختصاصی", "ویدیو", "ویدئو", "عکس", "تصاویر", "گزارش"}
+FLAG_WORDS = 8   # کشور باید توی ۸ کلمه‌ی اولِ تیتر باشه (بعد از حذف کلمه‌های «فوری»، «خبر» و مانند اون)
 
 
-# کلمه‌هایی که ایموجی اول رو اجباری می‌کنن
-RED_TERMS = ["جنگ", "سپاه", "ترامپ", "کمیسیون[\\s\u200c]+امنیت[\\s\u200c]+ملی"]
-YELLOW_TERMS = ["بورس", "فارکس", "ارز(?:ها|های)?[\\s\u200c]*دیجی?تال", "کریپتو", "رمز[\\s\u200c]*ارز"]
-_SUF = "(?:\u200c?(?:ها|های|ی|یی|ای))?"
-_red = "|".join(RED_TERMS)
-_yel = "|".join(YELLOW_TERMS)
-RED_RE = re.compile(rf"(?<![{_L}])(?:{_red}){_SUF}(?![{_L}])")      # جنگل قرمز حساب نمی‌شه
-YELLOW_RE = re.compile(rf"(?<![{_L}])(?:{_yel})")
-
-FLAG_WORDS = 6   # پرچم فقط وقتی که اسم کشور توی ۶ کلمه‌ی اولِ تیتر باشه
+def flag_of(code):
+    return "".join(chr(0x1F1E6 + ord(c) - 65) for c in code)
 
 
-def flags_for(title, limit=2):
+def flags_for(title, limit=3):
     if re.search("[\U0001F1E6-\U0001F1FF]", title):
         return ""  # خودش پرچم داره
-    t = title.replace("ي", "ی").replace("ك", "ک")
+    t = title.replace("ي", "ی").replace("ك", "ک").replace("#", " ").replace("_", " ")
     for bad in NOT_COUNTRY:
         t = t.replace(bad, " ")
-    t = " ".join(" ".join(t.split()).split(" ")[:FLAG_WORDS])
+    words = [w.strip(":،؛-–—|!؟?.«»\"'()") for w in t.split()]
+    words = [w for w in words if w]
+    while words and words[0] in FLAG_FILLERS:
+        words.pop(0)
+    s8, s6 = " ".join(words[:FLAG_WORDS]), " ".join(words[:6])
     found = []
-    for code, rx in COUNTRY_RE:
-        m = rx.search(t)
+    for code, rxc in COUNTRY_RE:
+        m = rxc.search(s8)
         if m:
             found.append((m.start(), code))
+    m = EU_RE.search(s6)   # اروپا فقط توی ۶ کلمه‌ی اول
+    if m:
+        found.append((m.start(), "EU"))
     found.sort()
-    return "".join(chr(0x1F1E6 + ord(c) - 65) for _, code in found[:limit] for c in code)
+    out = []
+    for _, code in found:
+        if code not in out:
+            out.append(code)
+    return "".join(flag_of(c) for c in out[:limit])
+
+
+# ====== کلمه‌های اجباری، منبع‌های 🔴 و شخص‌ها ======
+RED_RE = rx("جنگ", "سپاه", "ترامپ", r"کمیسیون[\s\u200c]+امنیت[\s\u200c]+ملی")
+YELLOW_RE = re.compile(rf"(?<![{_L}])(?:بورس|فارکس|ارز(?:ها|های)?[\s\u200c]*دیجی?تال|کریپتو|رمز[\s\u200c]*ارز)")
+RED_SRC_RE = rx("الجزایر", "الجزیره", r"فاکس[\s\u200c]*نیوز", r"Fox[\s\u200c]*News", r"کانال[\s\u200c]*(?:۱۴|14)",
+                r"سی[\s\u200c]*بی[\s\u200c]*اس", "CBS", r"وال[\s\u200c]*استریت(?:[\s\u200c]*ژورنال)?",
+                r"Wall[\s\u200c]*Street[\s\u200c]*Journal", "WSJ", r"فایننشال[\s\u200c]*تایمز",
+                r"Financial[\s\u200c]*Times", "اینترفکس", "Interfax", "العربیه", r"Al[\s\u200c-]*Arabiya",
+                r"صابرین[\s\u200c]*نیوز", "المیادین", r"نیویورک[\s\u200c]*تایمز", r"New[\s\u200c]*York[\s\u200c]*Times",
+                "آکسیوس", "Axios", r"محسن[\s\u200c]*رضایی", suffix=False)
+PERSON_FLAGS = [
+    (rx("نتانیاهو", "نتنیاهو", r"نتن[\s\u200c]*یاهو"), "IL"),
+    (rx(r"کاخ[\s\u200c]*سفید"), "US"),
+    (rx("زلنسکی", "زلینسکی", "زیلنسکی"), "UA"),
+    (rx("پوتین"), "RU"),
+]
+
+# ====== موضوع‌ها ======
+HOUSING_RE = rx("مسکن", "آپارتمان", "رهن", r"اجاره(?:[\s\u200c]*بها)?", "املاک")
+PLANE_RE = rx("هواپیما")
+DRUG_RE = rx("دارو", "داروخانه", "داروسازی", "داروساز")
+FOOT_STRONG_RE = rx("فوتبال", "فوتبالیست", r"لیگ[\s\u200c]*برتر", r"لیگ[\s\u200c]*قهرمانان", r"جام[\s\u200c]*جهانی",
+                    "پرسپولیس", r"رئال[\s\u200c]*مادرید", "بارسلونا", "لیورپول", r"منچستر[\s\u200c]*(?:یونایتد|سیتی)",
+                    "بایرن", "آرسنال", "چلسی", "یوونتوس", r"پاری[\s\u200c]*سن[\s\u200c]*ژرمن")
+FOOT_CLUB_RE = rx("استقلال", "سپاهان", "تراکتور", r"ذوب[\s\u200c]*آهن", "پیکان", "نساجی", r"گل[\s\u200c]*گهر")
+FOOT_CTX_RE = rx("تیم", "بازی", "لیگ", "گل", "باشگاه", "سرمربی", "مهاجم", "هافبک", r"دروازه[\s\u200c]*بان", "داور", "فصل")
+MOBILE_RE = rx("موبایل", "گوشی", "آیفون", "iPhone", "سامسونگ", "شیائومی", "گلکسی", "پیکسل", "هواوی", "ردمی",
+               r"تلفن[\s\u200c]*همراه")
+PETROL_RE = rx("بنزین")
+FOOD_RE = rx("شیر", "گوشت", "دام", "مرغ", r"تخم[\s\u200c]*مرغ", "لبنیات", r"مواد[\s\u200c]*غذایی",
+             r"مواد[\s\u200c]*اولیه", "پنیر", "ماست")
+PRICE_CTX_RE = rx("قیمت", "نرخ", "گران", "ارزان", "تومان", "ریال", "گرانی")
+DOLLAR_PRICE_RE = re.compile(r"(?:قیمت|نرخ)[\s\u200c]*(?:امروز[\s\u200c]*)?دلار|دلار[^\n]{0,40}تومان|دلار[\s\u200c]*(?:آزاد|امروز|بازار)")
+OTHER_CUR_RE = rx("یورو", "سکه", "طلا", "درهم", "پوند", "تتر", r"بیت[\s\u200c]*کوین", "لیر", "دینار", "یوان", "روبل",
+                  "نفت", "برنت", "بورس")
+WEATHER_RE = rx("هواشناسی", r"پیش[\s\u200c]*بینی[\s\u200c]*هوا", r"وضعیت[\s\u200c]*جوی", r"آب[\s\u200c]*و[\s\u200c]*هوا",
+                r"دمای[\s\u200c]*هوا", "بارش", "بارندگی", "باران", "رگبار", "برف", r"رعد[\s\u200c]*و[\s\u200c]*برق",
+                "آفتابی", "ابری", "یخبندان", r"گرد[\s\u200c]*و[\s\u200c]*خاک")
+
+
+def weather_emoji(t):
+    def has(p):
+        return re.search(p, t) is not None
+    if has(r"رعد|صاعقه|تندر"):
+        return "⛈️"
+    if has(r"برف|بوران|کولاک|یخبندان"):
+        return "🌨️"
+    if has(r"نیمه[\s\u200c]*ابری|ابر[\s\u200c]*و[\s\u200c]*آفتاب|گاهی[\s\u200c]*ابری"):
+        return "⛅️"
+    if has(r"رگبار|پراکنده|بارانی[\s\u200c]*و[\s\u200c]*آفتابی"):
+        return "🌦️"
+    if has(r"باران|بارش|بارندگی|سیل"):
+        return "🌧️"
+    if has(r"ابری|ابرناک|مه[\s\u200c]*آلود|گرد[\s\u200c]*و[\s\u200c]*خاک"):
+        return "🌥️"
+    return "🌤️"
+
+
+def is_football(head, category):
+    if FOOT_STRONG_RE.search(head):
+        return True
+    return bool(FOOT_CLUB_RE.search(head) and (FOOT_CTX_RE.search(head) or category == "sports"))
+
+
+MARKER = {"🔴": "🔻", "🟡": "🔸", "🔵": "🔹"}
+
+
+def decide(item):
+    """ایموجی اول متن و علامت پاراگراف‌ها رو تعیین می‌کنه. اول متن فقط یک ایموجی (یا چند پرچم)."""
+    title = item["title"]
+    paras = item.get("paras") or []
+    summary = item.get("summary", "")
+    head = title + " " + (paras[0] if paras else "")
+    full = title + " " + summary
+    cls = pick_emoji(item["category"], title, summary)
+    if is_oil_price(title):
+        return "🛢️", MARKER["🟡"]
+    if HOUSING_RE.search(head):
+        return "🏘️", MARKER["🟡"]
+    if PLANE_RE.search(" ".join(title.split()[:6])):
+        return "✈️", MARKER[cls]
+    if DRUG_RE.search(head):
+        return "💊", MARKER[cls]
+    if is_football(head, item["category"]):
+        return "⚽", MARKER["🔵"]
+    # شخص‌ها و کلمه‌های 🔴: هر کدوم که توی تیتر/بند اول زودتر اومده
+    cands = []
+    for prx, code in PERSON_FLAGS:
+        m = prx.search(head)
+        if m:
+            cands.append((m.start(), flag_of(code)))
+    m = RED_RE.search(head)
+    if m:
+        cands.append((m.start(), "🔴"))
+    if cands:
+        return min(cands)[1], MARKER["🔴"]
+    if item.get("red_src") or RED_RE.search(full):
+        return "🔴", MARKER["🔴"]
+    if YELLOW_RE.search(full):
+        return "🟡", MARKER["🟡"]
+    if PETROL_RE.search(full) or (FOOD_RE.search(head) and PRICE_CTX_RE.search(full)):
+        return "🔵", MARKER["🔵"]
+    if MOBILE_RE.search(head):
+        return "📱", MARKER["🔵"]
+    if DOLLAR_PRICE_RE.search(head) and not OTHER_CUR_RE.search(full):
+        return "💵", MARKER["🟡"]
+    if WEATHER_RE.search(head):
+        return weather_emoji(head), MARKER["🔵"]
+    flags = flags_for(title)
+    if flags:
+        return flags, MARKER[cls]
+    return cls, MARKER[cls]
 
 
 # ====== استخراج عکس و فیلم ======
@@ -316,7 +449,7 @@ EMOJI_RE = re.compile("[" + EMOJI_CHARS + "]+")
 LEAD_RE = re.compile("^(?:[" + EMOJI_CHARS + "]|[\\s\\-\u2013\u2014\u2022\u00b7|])+")
 
 # خبرهایی که این کلمه‌ها توشون باشه منتشر نمی‌شن (بدون فاصله و نیم‌فاصله بنویس)
-BLOCKED_WORDS = ["خوشچشم"]
+BLOCKED_WORDS = ["خوشچشم", "عوستاد", "رائفیپور", "رایفیپور", "عرزشی"]
 
 # کانال‌هایی که خبرِ شوخی‌شون منتشر نمی‌شه
 JOKE_CHANNELS = {"AloNews"}
@@ -347,12 +480,12 @@ def strip_leading_emoji(line):
 
 
 # کلمه‌های ممنوع فقط برای یک کانال
-CHANNEL_BLOCKED = {"AloNews": ["عوستاد"]}
+CHANNEL_BLOCKED = {}
 
 
 def is_blocked(text, extra=()):
-    key = re.sub(r"[\s\u200c]", "", text)
-    words = [re.sub(r"[\s\u200c]", "", w) for w in list(BLOCKED_WORDS) + list(extra)]
+    key = re.sub(r"[\s\u200c_\-]", "", text)
+    words = [re.sub(r"[\s\u200c_\-]", "", w) for w in list(BLOCKED_WORDS) + list(extra)]
     return any(w in key for w in words)
 
 
@@ -552,9 +685,61 @@ def fetch_kiosk(pages):
     return out
 
 
+# ====== فیلتر تبلیغ و پست‌های ممنوع کانال‌ها ======
+CHANNEL_SKIP_WORDS = {"arz_talaaa": ["صبحبخیر", "شببخیر"]}   # بدون فاصله
+WATCH_LINK_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.S | re.I)
+TRAIL_EMOJI_RE = re.compile("[" + EMOJI_CHARS + r"\s]+$")
+
+
+def has_watch_link(html_):
+    """«مشاهده فیلم» که روش لینک گذاشته شده (معمولاً تبلیغ یا ارجاع به جای دیگه‌ست)."""
+    for m in WATCH_LINK_RE.finditer(html_ or ""):
+        t = re.sub(r"<[^>]+>|[\s\u200c]", "", m.group(1))
+        if "مشاهدهفیلم" in t or "مشاهدهیفیلم" in t:
+            return True
+    return False
+
+
+def has_signature(p, name):
+    """امضای خود کانال (آیدی یا لینکش) باید توی چند خط آخر پست باشه؛ وگرنه تبلیغه."""
+    h = re.sub(r"(?i)<br\s*/?>", "\n", p.get("html") or "")
+    lines = [l for l in h.split("\n") if re.sub(r"<[^>]+>", "", l).strip()]
+    tail = "\n".join(lines[-4:])
+    n = re.escape(name)
+    return bool(re.search(rf"(?i)@{n}(?![A-Za-z0-9_])|(?:t|telegram)\.me/{n}(?![A-Za-z0-9_])", tail))
+
+
+def text_without_signature(p, name):
+    """متن پست، بدون خط امضای خود کانال (مثل «🆔 @name» یا «کانال ما» که لینک کانال روشه)."""
+    h = re.sub(r"(?i)<br\s*/?>", "\n", p.get("html") or "")
+    lines = h.split("\n")
+    n = re.escape(name)
+    sig = re.compile(rf"(?i)@{n}(?![A-Za-z0-9_])|(?:t|telegram)\.me/{n}(?![A-Za-z0-9_])")
+    nonempty = [i for i, l in enumerate(lines) if re.sub(r"<[^>]+>", "", l).strip()]
+    drop = set()
+    for i in nonempty[-4:]:
+        plain = re.sub(r"<[^>]+>", "", lines[i]).strip()
+        if sig.search(lines[i]) and len(plain) <= 60:
+            drop.add(i)
+    kept = [l for i, l in enumerate(lines) if i not in drop]
+    return html.unescape(re.sub(r"<[^>]+>", "", "\n".join(kept)))
+
+
+def trim_trailing_emoji(lines):
+    lines = list(lines)
+    while lines:
+        t = TRAIL_EMOJI_RE.sub("", lines[-1]).rstrip()
+        if t:
+            lines[-1] = t
+            break
+        lines.pop()
+    return lines
+
+
 def fetch_tg(category, name, domestic):
     items = []
     skipped_night = 0
+    ads = 0
     try:
         r = requests.get(f"https://t.me/s/{name}", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
         posts = parse_tg_page(r.text)
@@ -569,20 +754,36 @@ def fetch_tg(category, name, domestic):
             if name in JOKE_CHANNELS and looks_like_joke(raw):
                 print("  joke, skipped:", raw[:40].replace("\n", " "))
                 continue
-            text = clean_tg(raw)
+            key = re.sub(r"[\s\u200c_\-]", "", raw)
+            if any(w in key for w in CHANNEL_SKIP_WORDS.get(name, ())):
+                print("  greeting post, skipped:", raw[:30].replace("\n", " "))
+                continue
+            if has_watch_link(p.get("html")):
+                print("  'مشاهده فیلم' link, skipped:", raw[:30].replace("\n", " "))
+                continue
+            if not has_signature(p, name):
+                ads += 1
+                print("  ad (no channel signature), skipped:", raw[:30].replace("\n", " "))
+                continue
+            red_src = bool(RED_SRC_RE.search(raw))
+            text = clean_tg(text_without_signature(p, name))
             lines = [l.strip() for l in text.split("\n") if l.strip()]
             kind = detect_pricelist(lines)
             if kind:
                 # لیست قیمت: ایموجی‌های داخل متن دست‌نخورده می‌مونه، فقط ایموجی اول عوض می‌شه
                 title = clean(strip_leading_emoji(lines[0]), 200)
-                paras = [x for x in (strip_sources(l) for l in lines[1:]) if x]
+                paras = trim_trailing_emoji([x for x in (strip_sources(l) for l in lines[1:]) if x])
             else:
                 text = strip_emoji(text)  # ایموجی‌های خود کانال حذف می‌شه
                 lines = [l for l in text.split("\n") if l.strip()]
                 if not lines or len(text) < 15:
                     continue
+                rest = lines[1:]
                 title = clean(lines[0], 200)
-                paras = [x for x in clean_paras("\n".join(lines[1:]), 700) if x != title]
+                if len(lines) > 1 and len(lines[0].split()) <= 2:   # مثلاً «فوری»: تیتر واقعی خط بعدیه
+                    title = clean(lines[0] + " " + lines[1], 200)
+                    rest = lines[2:]
+                paras = [x for x in clean_paras("\n".join(rest), 700) if x != title]
             if not title:
                 continue
             ts = 0
@@ -596,11 +797,12 @@ def fetch_tg(category, name, domestic):
                 continue
             items.append({"id": "tg:" + p["post_id"], "title": title, "summary": " ".join(paras),
                           "paras": paras, "kind": kind, "category": category, "domestic": domestic,
-                          "media": p["media"], "image": None, "video": None, "ts": ts})
+                          "red_src": red_src, "media": p["media"], "image": None, "video": None, "ts": ts})
     except Exception as ex:
         print("telegram channel error:", name, ex)
     items.sort(key=lambda x: x["ts"])
-    print(f"{len(items):3d} items  tg:{name}" + (f"  ({skipped_night} پست ساعت ۰۱ تا ۰۷ رد شد)" if skipped_night else ""))
+    print(f"{len(items):3d} items  tg:{name}" + (f"  ({skipped_night} پست ساعت ۰۱ تا ۰۷ رد شد)" if skipped_night else "")
+          + (f"  ({ads} تبلیغ رد شد)" if ads else ""))
     return items
 
 
@@ -671,9 +873,6 @@ def prepare_proxies(want=15, max_checks=80):
 # ====== ارسال ======
 PARSE_MODE = ["HTML"]
 UPLOAD_FAILS = [0]   # اگه آپلود دو بار تایم‌اوت شد، بقیه‌ی اجرا بدون آپلود ادامه پیدا می‌کنه
-MARKER = {"🔴": "🔻", "🟡": "🔶", "🔵": "🔷"}
-
-
 def proxy_parts():
     """(نسخه‌ی HTML, نسخه‌ی ساده) خط پروکسی."""
     link = random.choice(ALIVE) if ALIVE else PROXY_LINK
@@ -690,21 +889,7 @@ def build_text(item, max_len=4000):
         lead = "🚙" if kind == "car" else "🟡"
         marker = ""
     else:
-        full = item["title"] + " " + item.get("summary", "")
-        base = pick_emoji(item["category"], item["title"], item.get("summary", ""))
-        marker = MARKER[base]
-        flags = flags_for(item["title"])
-        forced = (base == "🔴" and RED_RE.search(full)) or (base == "🟡" and YELLOW_RE.search(full))
-        if is_oil_price(item["title"]):
-            lead = "🛢️"          # قیمت نفت: فقط همین ایموجی
-            if base == "🔵":
-                marker = "🔶"
-        elif forced:
-            lead = base + (" " + flags if flags else "")   # کلمه‌ی اجباری: ایموجی اول، بعدش پرچم
-        elif flags:
-            lead = flags          # اگه پرچم هست، ایموجی دسته‌بندی گذاشته نمی‌شه
-        else:
-            lead = base
+        lead, marker = decide(item)
     first = f"{lead} <b>{esc(item['title'])}</b>"
 
     tail = [proxy_parts()[0], CHANNEL]
@@ -1148,6 +1333,29 @@ def commit_state():
         print("commit error:", repr(ex))
 
 
+def next_round_time(t0):
+    """دور بعدی: ۲۰ دقیقه بعد از آخرین نوبتِ کانال‌ها (حتی اگه بین دو اجرا فاصله افتاده باشه)."""
+    last = load_state().get("last_tg") or 0
+    nxt = last + TG_EVERY_MIN * 60 if last else t0 + TG_EVERY_MIN * 60
+    return max(nxt, time.time() + 30)
+
+
+def dispatch_next():
+    """اجرای بعدی رو خودش صدا می‌زنه (به زمان‌بندی دیرکردیِ گیت‌هاب وابسته نمی‌مونیم)."""
+    repo, tok = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
+    if not (os.environ.get("GITHUB_ACTIONS") and repo and tok):
+        return
+    ref = os.environ.get("GITHUB_REF_NAME", "main")
+    wf = os.environ.get("GITHUB_WORKFLOW_REF", "").split("@")[0].rsplit("/", 1)[-1] or "news.yml"
+    try:
+        r = requests.post(f"https://api.github.com/repos/{repo}/actions/workflows/{wf}/dispatches",
+                          headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"},
+                          json={"ref": ref, "inputs": {"mode": "auto"}}, timeout=20)
+        print("اجرای بعدی صدا زده شد:", r.status_code)
+    except Exception as ex:
+        print("dispatch error:", repr(ex))
+
+
 def main():
     loop_minutes = LOOP_MINUTES
     if loop_minutes > 0 and (is_force_run() or not repo_is_public()):
@@ -1158,6 +1366,7 @@ def main():
         run_once()
         return
     end = time.time() + loop_minutes * 60
+    quiet = False
     while True:
         t0 = time.time()
         status = None
@@ -1168,14 +1377,17 @@ def main():
         commit_state()
         if status == "quiet":
             print("ساعت سکوت شد؛ حلقه تموم می‌شه.")
+            quiet = True
             break
-        nxt = t0 + TG_EVERY_MIN * 60
-        if nxt + 60 > end:
+        nxt = next_round_time(t0)
+        if nxt > end + 300:
             break
         wait = nxt - time.time()
         print(f"دور بعدی تا {wait / 60:.0f} دقیقه‌ی دیگه.")
         if wait > 0:
             time.sleep(wait)
+    if not quiet:
+        dispatch_next()
 
 
 if __name__ == "__main__":
