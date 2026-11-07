@@ -280,6 +280,22 @@ WEATHER_RE = rx("هواشناسی", r"پیش[\s\u200c]*بینی[\s\u200c]*هوا
                 "آفتابی", "ابری", "یخبندان", r"گرد[\s\u200c]*و[\s\u200c]*خاک")
 
 
+CIVIL_RE = rx("گواهینامه", r"گواهی[\s\u200c]*نامه", r"کارت[\s\u200c]*سوخت", r"تعویض[\s\u200c]*پلاک", "کالابرگ", r"کالا[\s\u200c]*برگ")
+AIR_RE = rx("پهپاد", "موشک", "هواپیما", "جنگنده", "بالگرد", r"هلی[\s\u200c]*کوپتر")
+MISSILE_DRONE_RE = rx("پهپاد", "موشک")
+DOWN_RE = rx("سرنگون", "سرنگونی", "ساقط")
+BLAST_RE = rx("انفجار", "منفجر", "اصابت")
+
+
+def has_strike_event(head):
+    """سرنگونی پهپاد/هواپیما، یا انفجار و اصابت موشک/پهپاد."""
+    d, a = DOWN_RE.search(head), AIR_RE.search(head)
+    if d and a:
+        return True
+    b, m = BLAST_RE.search(head), MISSILE_DRONE_RE.search(head)
+    return bool(b and m)
+
+
 def weather_emoji(t):
     def has(p):
         return re.search(p, t) is not None
@@ -319,6 +335,8 @@ def decide(item):
         return "🛢️", MARKER["🟡"]
     if HOUSING_RE.search(head):
         return "🏘️", MARKER["🟡"]
+    if has_strike_event(head):
+        return "🔴", MARKER["🔴"]
     if PLANE_RE.search(" ".join(title.split()[:6])):
         return "✈️", MARKER[cls]
     if DRUG_RE.search(head):
@@ -340,7 +358,7 @@ def decide(item):
         return "🔴", MARKER["🔴"]
     if YELLOW_RE.search(full):
         return "🟡", MARKER["🟡"]
-    if PETROL_RE.search(full) or (FOOD_RE.search(head) and PRICE_CTX_RE.search(full)):
+    if PETROL_RE.search(full) or CIVIL_RE.search(full) or (FOOD_RE.search(head) and PRICE_CTX_RE.search(full)):
         return "🔵", MARKER["🔵"]
     if MOBILE_RE.search(head):
         return "📱", MARKER["🔵"]
@@ -819,6 +837,8 @@ def fetch_feed(category, url, domestic):
             title = clean(e.title, 200)
             if not title:
                 continue
+            if "euronews" in url and (re.match(r"\s*مجله[\s\u200c]*خبری", title) or "mglh-khbri" in (e.get("link") or "")):
+                continue   # «مجله خبری» یورونیوز منتشر نمی‌شه
             paras = [p for p in clean_paras(e.get("summary", ""), 700) if p != title]
             summary = " ".join(paras)
             if len(summary) < 20:
