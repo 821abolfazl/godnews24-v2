@@ -831,6 +831,7 @@ def fetch_tg(category, name, domestic):
         r = requests.get(f"https://t.me/s/{name}", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
         posts = parse_tg_page(r.text)
         print(f"tg:{name} http={r.status_code} bytes={len(r.text)} posts_with_text={len(posts)}")
+        READ_STATUS[name] = len(posts)
         if not posts:
             print(f"  ! هیچ پستی خونده نشد: پیش‌نمایش عمومی کانال بسته‌ست یا دسترسی بلاکه (آیدی: {name})")
         for p in posts:
@@ -903,6 +904,7 @@ def fetch_tg(category, name, domestic):
                           "red_src": red_src, "media": p["media"], "image": None, "video": None, "ts": ts})
     except Exception as ex:
         print("telegram channel error:", name, ex)
+        READ_STATUS[name] = 0
     items.sort(key=lambda x: x["ts"])
     print(f"{len(items):3d} items  tg:{name}" + (f"  ({skipped_night} پست ساعت ۰۱ تا ۰۷ رد شد)" if skipped_night else "")
           + (f"  ({ads} تبلیغ رد شد)" if ads else ""))
@@ -1018,6 +1020,52 @@ def build_text(item, max_len=4000):
     return text
 
 
+# ====== هشدار به ادمین (چت خصوصی) ======
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "").strip()   # از GitHub Secrets؛ توی فایل نوشته نمی‌شه
+STATE_REF = [None]            # حالت همین دور (برای فاصله‌ی بین هشدارها)
+READ_STATUS = {}              # تعداد پست‌های خونده‌شده از هر کانال در همین اجرا
+NO_POST_ALERT_MIN = 90        # اگه این‌قدر دقیقه توی ساعت‌های فعال پستی نرفت: هشدار
+EMPTY_STREAK_ALERT = 3        # اگه کانالی این‌قدر بار پشت‌سرهم خونده نشد: هشدار
+AUTH_HINTS = ("chat not found", "not enough rights", "bot was kicked", "bot is not a member",
+              "chat_write_forbidden", "have no rights", "unauthorized")
+
+
+def alert(key, text, cooldown_h=3):
+    """به ادمین پیام می‌ده؛ برای هر کلید حداقل cooldown_h ساعت فاصله می‌ذاره (۰ = همیشه)."""
+    if not ADMIN_CHAT_ID:
+        return False
+    state = STATE_REF[0]
+    now = time.time()
+    if state is not None and cooldown_h:
+        if now - state.setdefault("alerts", {}).get(key, 0) < cooldown_h * 3600:
+            return False
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                          data={"chat_id": ADMIN_CHAT_ID, "text": text[:3500]}, timeout=20)
+        ok = r.ok
+        if not ok:
+            print("  admin alert failed:", r.status_code, r.text[:120])
+    except requests.RequestException as ex:
+        print("  admin alert network error:", type(ex).__name__)
+        ok = False
+    if ok and state is not None:
+        state.setdefault("alerts", {})[key] = now
+    return ok
+
+
+def minutes_since_active_start(m):
+    """دقیقه‌ی گذشته از شروع بازه‌ی فعال (۰۸:۳۰ تهران)."""
+    return (m - 510) % 1440
+
+
+def check_no_post(state, now, m):
+    last = state.get("last_post") or now
+    gap = (now - last) / 60
+    if gap > NO_POST_ALERT_MIN and minutes_since_active_start(m) > NO_POST_ALERT_MIN:
+        alert("nopost", f"⚠️ حدود {int(gap)} دقیقه‌ست توی کانال پستی نرفته.\n"
+                        "Actions را ببین؛ اگه اجرایی در حال کار نبود، Run workflow با mode=auto بزن.", 3)
+
+
 def tg(method, files=None, **data):
     data["chat_id"] = CHANNEL
     if PARSE_MODE[0] and method != "sendMediaGroup":
@@ -1040,6 +1088,10 @@ def tg(method, files=None, **data):
         return False
     if not r.ok:
         print("  telegram error:", method, r.status_code, r.text[:150])
+        low = r.text.lower()
+        if r.status_code in (401, 403) or any(h in low for h in AUTH_HINTS):
+            alert("tg_auth", f"🚫 تلگرام خطا داد ({method} {r.status_code}): {r.text[:160]}\n"
+                             "احتمالاً ربات ادمین کانال نیست، حذف شده یا توکن عوض شده.", 1)
     return r.ok
 
 
@@ -1277,7 +1329,9 @@ def is_quiet_hours():
 
 def run_once():
     UPLOAD_FAILS[0] = 0
+    READ_STATUS.clear()
     state = load_state()
+    STATE_REF[0] = state
     now = time.time()
     # اجرای دستی از دکمه‌ی Run workflow: همه‌چیز؛ اجرای خودکار (mode=auto) طبق زمان‌بندی
     force = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and os.environ.get("RUN_MODE", "manual") != "auto"
@@ -1307,6 +1361,14 @@ def run_once():
         return "notdue"
 
     prepare_proxies()
+    if ADMIN_CHAT_ID and not state.get("admin_hello"):
+        if alert("hello", "✅ هشدارهای ربات GodNews24 فعال شد. اگه مشکلی پیش بیاد اینجا خبر می‌دم.", 0):
+            state["admin_hello"] = True
+    if not ALIVE:
+        total = len(load_proxies())
+        alert("noproxy", "⚠️ پروکسی سالمی پیدا نشد؛ فایل proxies.txt را به‌روز کن."
+              if total else "⚠️ فایل proxies.txt خالی است و پروکسی ندارم.", 12)
+    state.setdefault("last_post", now)
     seen = dict.fromkeys(state["seen"])   # ترتیب حفظ می‌شه
     seeded = set(state["seeded"])
     recent = [t for t in state["titles"] if now - t["t"] < DEDUP_HOURS * 3600]
@@ -1356,6 +1418,14 @@ def run_once():
         print(f"کانال‌های تلگرامی: {len(cands)} خبر تازه، {len(chosen)} تا انتخاب شد (سقف {n})")
         to_post += chosen
         state["last_tg"] = now
+        streak = state.setdefault("empty_streak", {})
+        for _cat, _url, _dom in tg_feeds:
+            nm = _url[3:]
+            if nm in READ_STATUS:
+                streak[nm] = streak.get(nm, 0) + 1 if READ_STATUS[nm] == 0 else 0
+                if streak[nm] >= EMPTY_STREAK_ALERT:
+                    alert(f"empty:{nm}", f"⚠️ خوندن کانال @{nm} {streak[nm]} بار پشت‌سرهم ناموفق بود "
+                                        "(پیش‌نمایش عمومی بسته شده یا دسترسی بلاکه).", 6)
 
     if run_other:
         cands = collect(other_feeds, seen, seeded, seed_n=1)
@@ -1373,7 +1443,8 @@ def run_once():
     started = time.time()
     try:
         for kind, p in pre:
-            run_special(kind, p, seen, ks)
+            if run_special(kind, p, seen, ks):
+                state["last_post"] = time.time()
             time.sleep(3)
 
         for item in sorted(to_post, key=lambda x: x["ts"]):
@@ -1381,16 +1452,21 @@ def run_once():
                 print("زمان این اجرا تموم شد؛ بقیه‌ی خبرها نوبت بعد.")
                 break
             if send(item):
+                state["last_post"] = time.time()
                 seen[item["id"]] = None
                 recent.append({"t": time.time(), "k": sorted(item["tok"])})
                 print("posted:", item["title"][:60])
             time.sleep(3)
 
         for kind, p in post:
-            run_special(kind, p, seen, ks)
+            if run_special(kind, p, seen, ks):
+                state["last_post"] = time.time()
     except Exception as ex:   # هر خطایی بیاد، حافظه ذخیره می‌شه تا خبر تکراری نره
         print("خطا در ارسال:", repr(ex))
+        alert("error", f"❌ خطا در ارسال: {repr(ex)[:300]}", 1)
     finally:
+        if not only_night and not force:
+            check_no_post(state, time.time(), m)
         state["seen"] = list(seen)
         state["seeded"] = list(seeded)
         state["titles"] = recent[-400:]
@@ -1459,8 +1535,12 @@ def dispatch_next():
                           headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"},
                           json={"ref": ref, "inputs": {"mode": "auto"}}, timeout=20)
         print("اجرای بعدی صدا زده شد:", r.status_code)
+        if r.status_code != 204:
+            alert("dispatch", f"⚠️ صدا زدن اجرای بعدی ناموفق بود (کد {r.status_code}). "
+                              "اگه ربات متوقف شد، Run workflow با mode=auto بزن.", 0)
     except Exception as ex:
         print("dispatch error:", repr(ex))
+        alert("dispatch", "⚠️ صدا زدن اجرای بعدی ناموفق بود. اگه ربات متوقف شد، Run workflow با mode=auto بزن.", 0)
 
 
 def main():
@@ -1481,6 +1561,7 @@ def main():
             status = run_once()
         except Exception as ex:
             print("خطا در این دور:", repr(ex))
+            alert("loop_error", f"❌ خطا در یک دور ربات: {repr(ex)[:300]}", 1)
         commit_state()
         if status == "quiet":
             print("ساعت سکوت شد؛ حلقه تموم می‌شه.")
