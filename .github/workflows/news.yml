@@ -38,6 +38,7 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           RUN_MODE: ${{ github.event.inputs.mode }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}   # شناسه‌ی چت خصوصی تو برای هشدارها (Secret)
           # حالت حلقه (دقیق هر ۲۰ دقیقه): در Settings ← Secrets and variables ← Actions ← Variables
           # یک متغیر به اسم LOOP_MINUTES با مقدار 55 بساز. فقط برای repository عمومی کار می‌کنه.
           LOOP_MINUTES: ${{ vars.LOOP_MINUTES }}
