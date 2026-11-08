@@ -38,7 +38,6 @@ FEEDS = [
     # --- منابع اصلی (کانال‌های تلگرام) ---
     ("general", "tg:AloNews", False),
     ("economy", "tg:arz_talaaa", False),
-    ("general", "tg:VahidOnline", False),
     # --- خبرگزاری‌های خارجی ---
     ("general", "https://parsi.euronews.com/rss?format=mrss", False),
     ("general", "https://rss.dw.com/xml/rss-per-all", False),
@@ -97,7 +96,7 @@ def pick_emoji(category, title, body=""):
 
 
 # ====== حذف منبع از متن ======
-SRC = (r"(?:صابرین\s?نیوز|المیادین|نیویورک\s?تایمز|آکسیوس|فاکس\s?نیوز|سی\s?بی\s?اس|وال\s?استریت(?:\s?ژورنال)?|فایننشال\s?تایمز|اینترفکس|العربیه|الجزیره|الجزایر|کانال\s?(?:۱۴|14)(?:\s?اسرائیل)?|ایسنا|مهر|ایرنا|تسنیم|فارس|مشرق|تابناک|خبرآنلاین|خبر\s?آنلاین|همشهری|ایلنا|ایکنا|"
+SRC = (r"(?:CNN|سی\s?ان\s?ان|شبکه\s?(?:خبری\s?)?کان|صابرین\s?نیوز|المیادین|نیویورک\s?تایمز|آکسیوس|فاکس\s?نیوز|سی\s?بی\s?اس|وال\s?استریت(?:\s?ژورنال)?|فایننشال\s?تایمز|اینترفکس|العربیه|الجزیره|الجزایر|کانال\s?(?:۱۴|14)(?:\s?اسرائیل)?|ایسنا|مهر|ایرنا|تسنیم|فارس|مشرق|تابناک|خبرآنلاین|خبر\s?آنلاین|همشهری|ایلنا|ایکنا|"
        r"جماران|انتخاب|عصر\s?ایران|یورونیوز|دویچه[\s‌]?وله|DW|ورزش\s?(?:۳|3|سه)|دیجیاتو|زومیت|"
        r"دنیای\s?اقتصاد|اقتصادنیوز|اکوایران|تجارت\s?نیوز|باشگاه\s?خبرنگاران(?:\s?جوان)?|"
        r"خبرگزاری\s?صدا\s?و\s?سیما|BBC|رویترز|AFP|آسوشیتدپرس|AP)")
@@ -157,7 +156,7 @@ def is_oil_price(title):
     return has_oil and has_price
 
 
-_L = "\u0600-\u06FF\u200c"
+_L = "\u0621-\u063A\u0641-\u064A\u064B-\u0652\u0671-\u06D3\u06D5\u06F0-\u06F9\u200c"   # فقط حرف؛ ویرگول و نقطه‌ویرگول فارسی حرف حساب نمی‌شن
 
 
 def rx(*alts, suffix=True):
@@ -242,14 +241,17 @@ def flags_for(title, limit=3):
 
 
 # ====== کلمه‌های اجباری، منبع‌های 🔴 و شخص‌ها ======
-RED_RE = rx("جنگ", "سپاه", "ترامپ", r"کمیسیون[\s\u200c]+امنیت[\s\u200c]+ملی")
+RED_RE = rx("جنگ", "سپاه", "ترامپ", r"کمیسیون[\s\u200c]+امنیت[\s\u200c]+ملی", r"رضا[\s\u200c]*پهلوی",
+            "هگست", "هگسث", "هیگست", "روبیو")
 YELLOW_RE = re.compile(rf"(?<![{_L}])(?:بورس|فارکس|ارز(?:ها|های)?[\s\u200c]*دیجی?تال|کریپتو|رمز[\s\u200c]*ارز)")
-RED_SRC_RE = rx("الجزایر", "الجزیره", r"فاکس[\s\u200c]*نیوز", r"Fox[\s\u200c]*News", r"کانال[\s\u200c]*(?:۱۴|14)",
+RED_SRC_RE = rx(r"پست[\s\u200c]*واشنگتن", r"واشنگتن[\s\u200c]*پست", r"Washington[\s\u200c]*Post", "الجزایر", "الجزیره", r"فاکس[\s\u200c]*نیوز", r"Fox[\s\u200c]*News", r"کانال[\s\u200c]*(?:۱۴|14)",
                 r"سی[\s\u200c]*بی[\s\u200c]*اس", "CBS", r"وال[\s\u200c]*استریت(?:[\s\u200c]*ژورنال)?",
                 r"Wall[\s\u200c]*Street[\s\u200c]*Journal", "WSJ", r"فایننشال[\s\u200c]*تایمز",
                 r"Financial[\s\u200c]*Times", "اینترفکس", "Interfax", "العربیه", r"Al[\s\u200c-]*Arabiya",
                 r"صابرین[\s\u200c]*نیوز", "المیادین", r"نیویورک[\s\u200c]*تایمز", r"New[\s\u200c]*York[\s\u200c]*Times",
-                "آکسیوس", "Axios", r"محسن[\s\u200c]*رضایی", suffix=False)
+                "آکسیوس", "Axios", r"محسن[\s\u200c]*رضایی",
+                r"سی[\s\u200c]*ان[\s\u200c]*ان", "CNN", r"شبکه[\s\u200c]*(?:خبری[\s\u200c]*)?کان",
+                r"کان[\s\u200c]*(?:اسرائیل|اسراییل)", suffix=False)
 PERSON_FLAGS = [
     (rx("نتانیاهو", "نتنیاهو", r"نتن[\s\u200c]*یاهو"), "IL"),
     (rx(r"کاخ[\s\u200c]*سفید"), "US"),
@@ -296,6 +298,44 @@ def has_strike_event(head):
     return bool(b and m)
 
 
+FRUIT_RE = rx("میوه", "سیب", "پرتقال", "نارنگی", "موز", "هندوانه", "خربزه", "طالبی", "انار", "انگور", "گلابی",
+              "هلو", "زردآلو", "شلیل", "گیلاس", "کیوی", "لیمو", "انجیر", "خرما", "توت", "آناناس", "انبه", "آلو")
+BET_RE = rx(r"شرط[\s\u200c]*بندی", r"شرط[\s\u200c]*بند", "کازینو", "بتینگ", "betting", "1xbet", r"وان[\s\u200c]*ایکس[\s\u200c]*بت",
+            "ملبت", "melbet", r"پین[\s\u200c]*آپ", r"pin[\s\u200c-]*up", r"بت[\s\u200c]*فا", "بتفا", r"بت[\s\u200c]*(?:۹۰|90)",
+            "bet90", "رولت", "پوکر", r"سایت[\s\u200c]*(?:های[\s\u200c]*)?شرط", r"سایت[\s\u200c]*بت", r"ضریب[\s\u200c]*شرط",
+            "بونوس", suffix=False)
+BET_LATIN_RE = re.compile(r"(?<![A-Za-z0-9])bet(?![A-Za-z])", re.I)
+# تبلیغ فیلترشکن/کانفیگ/اینترنت ملی (ته پست پاک می‌شه)
+VPN_PROMO_RE = re.compile(r"فیلتر[\s\u200c]*شکن|اینترنت[\s\u200c]*ملی|نت[\s\u200c]*ملی|کانفیگ|کانفینگ|v2ray|vpn|وی[\s\u200c]*پی[\s\u200c]*ان|پروکسی", re.I)
+STRONG_PROMO_RE = re.compile(r"فیلتر[\s\u200c]*شکن|کانفیگ|کانفینگ|v2ray|vpn|وی[\s\u200c]*پی[\s\u200c]*ان|پروکسی", re.I)
+
+
+def is_betting(text):
+    return bool(BET_RE.search(text) or BET_LATIN_RE.search(text))
+
+
+CAR_WORD_RE = rx(r"ایران[\s\u200c]*خودرو", "خودرو", "خودروساز", "خودروسازی", "ماشین", "پراید", "پژو", "تیبا", "سمند", "ساینا", "کوییک", "سورن",
+                 "هایما", "چانگان", "چری", "MVM", r"ام[\s\u200c]*وی[\s\u200c]*ام", "کیا", "هیوندای", "تویوتا", "مزدا",
+                 "نیسان", "رنو", r"بی[\s\u200c]*ام[\s\u200c]*و", "مرسدس", "تسلا", "فورد", "شورولت", "هوندا", "پورشه",
+                 "فراری", "سایپا")
+CAR_EXCL_RE = rx(r"ماشین[\s\u200c]*آلات", r"ماشین[\s\u200c]*لباسشویی", r"ماشین[\s\u200c]*ظرفشویی", r"ماشین[\s\u200c]*حساب")
+CAR_CTX_RE = rx("تولید", "فروش", "قیمت", "خرید", "بازار", "عرضه", "واردات", "صادرات", r"پیش[\s\u200c]*فروش",
+                r"قرعه[\s\u200c]*کشی", r"ثبت[\s\u200c]*نام", "گران", "ارزان", "تومان", "نرخ", "تیراژ")
+POLITICAL_RE = rx(r"رئیس[\s\u200c]*جمهور", "مذاکره", "مذاکرات", "تحریم", "انتخابات", r"شورای[\s\u200c]*امنیت", "نظامی",
+                  "ارتش", "ناتو", "مجلس", "کنگره", "پارلمان", "سفیر", "دیپلمات", r"آتش[\s\u200c]*بس", "وزیر",
+                  r"نخست[\s\u200c]*وزیر", "پدافند", "اعدام", "بازداشت")
+POLITICAL_SKIP_CHANNELS = {"arz_talaaa"}   # این کانال‌ها خبر سیاسی نمی‌دن
+
+
+def is_car_post(head, full):
+    return bool(CAR_WORD_RE.search(head) and not CAR_EXCL_RE.search(head) and CAR_CTX_RE.search(full))
+
+
+def is_political(head):
+    return bool(POLITICAL_RE.search(head) or RED_RE.search(head)
+                or any(prx.search(head) for prx, _ in PERSON_FLAGS) or has_strike_event(head))
+
+
 def weather_emoji(t):
     def has(p):
         return re.search(p, t) is not None
@@ -337,6 +377,8 @@ def decide(item):
         return "🏘️", MARKER["🟡"]
     if has_strike_event(head):
         return "🔴", MARKER["🔴"]
+    if is_car_post(head, full):
+        return "🚙", MARKER["🟡"]
     if PLANE_RE.search(" ".join(title.split()[:6])):
         return "✈️", MARKER[cls]
     if DRUG_RE.search(head):
@@ -354,11 +396,12 @@ def decide(item):
         cands.append((m.start(), "🔴"))
     if cands:
         return min(cands)[1], MARKER["🔴"]
-    if item.get("red_src") or RED_RE.search(full):
+    if item.get("red_src") or RED_RE.search(full) or RED_SRC_RE.search(full):
         return "🔴", MARKER["🔴"]
     if YELLOW_RE.search(full):
         return "🟡", MARKER["🟡"]
-    if PETROL_RE.search(full) or CIVIL_RE.search(full) or (FOOD_RE.search(head) and PRICE_CTX_RE.search(full)):
+    if PETROL_RE.search(full) or CIVIL_RE.search(full) or (
+            (FOOD_RE.search(head) or FRUIT_RE.search(head)) and PRICE_CTX_RE.search(full)):
         return "🔵", MARKER["🔵"]
     if MOBILE_RE.search(head):
         return "📱", MARKER["🔵"]
@@ -512,7 +555,7 @@ def looks_like_joke(raw):
 
 
 def has_word(text, w):
-    return re.search(r"(?<![\u0600-\u06FF])" + re.escape(w) + r"(?![\u0600-\u06FF])", text) is not None
+    return re.search(rf"(?<![{_L}])" + re.escape(w) + rf"(?![{_L}])", text) is not None
 
 
 def digit_lines(lines):
@@ -641,10 +684,13 @@ def tg_safe_html(inner):
 
 
 def remove_hashtags(h):
-    h = re.sub(r"#[\w\u0600-\u06FF\u200c]+", "", h)
+    h_orig = h
+    h = re.sub(rf"#[\w{_L}]+", "", h)
     out = []
     for line in h.split("\n"):
         line = re.sub(r"[ \t]{2,}", " ", line).strip()
+        line = re.sub(r"[ \t]+([،؛.!؟])", r"\1", line)        # فاصله‌ی اضافه قبل از ویرگول (بعد از حذف هشتگ)
+        line = re.sub(r"^[\s،؛]+", "", line) if "#" in h_orig else line
         if not line and (not out or not out[-1]):
             continue
         out.append(line)
@@ -707,6 +753,29 @@ def fetch_kiosk(pages):
 CHANNEL_SKIP_WORDS = {"arz_talaaa": ["صبحبخیر", "شببخیر"]}   # بدون فاصله
 WATCH_LINK_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.S | re.I)
 TRAIL_EMOJI_RE = re.compile("[" + EMOJI_CHARS + r"\s]+$")
+
+
+_WAPO = r"(?:واشنگتن[\s\u200c]*پست|پست[\s\u200c]*واشنگتن|Washington[\s\u200c]*Post)"
+WAPO_END_PATTERNS = [
+    re.compile(r"^\s*(?:منبع\s*:?\s*)?" + _WAPO + r"\s*\.?\s*$", re.I),                                  # کل خط = منبع
+    re.compile(r"\s*[\-\u2013\u2014|:(\[«]\s*(?:منبع\s*:?\s*)?" + _WAPO + r"\s*[)\]»]?\s*\.?\s*$", re.I),  # ... - واشنگتن پست
+    re.compile(r"\s*(?:منبع\s*:|(?:به\s+نقل\s+از|به\s+گزارش|طبق\s+گزارش))\s*" + _WAPO + r"\s*\.?\s*$", re.I),  # منبع: ... / به نقل از ...
+]
+
+
+def strip_end_source(lines):
+    """نام «واشنگتن پست» فقط وقتی به‌عنوان منبعِ آخر پست اومده پاک می‌شه؛ وسط متن دست‌نخورده می‌مونه."""
+    lines = list(lines)
+    if lines:
+        t = lines[-1]
+        for rxp in WAPO_END_PATTERNS:
+            t = rxp.sub("", t)
+        t = t.rstrip(" \t-\u2013\u2014|:،,")
+        if t.strip():
+            lines[-1] = t
+        else:
+            lines.pop()
+    return lines
 
 
 def has_watch_link(html_):
@@ -773,6 +842,9 @@ def fetch_tg(category, name, domestic):
                 print("  joke, skipped:", raw[:40].replace("\n", " "))
                 continue
             key = re.sub(r"[\s\u200c_\-]", "", raw)
+            if is_betting(raw):
+                print("  betting ad, skipped:", raw[:30].replace("\n", " "))
+                continue
             if any(w in key for w in CHANNEL_SKIP_WORDS.get(name, ())):
                 print("  greeting post, skipped:", raw[:30].replace("\n", " "))
                 continue
@@ -785,7 +857,17 @@ def fetch_tg(category, name, domestic):
                 continue
             red_src = bool(RED_SRC_RE.search(raw))
             text = clean_tg(text_without_signature(p, name))
-            lines = [l.strip() for l in text.split("\n") if l.strip()]
+            lines = strip_end_source([l.strip() for l in text.split("\n") if l.strip()])
+            # خط‌های تبلیغ فیلترشکن/کانفیگ/اینترنت ملی ته پست حذف می‌شه
+            j = len(lines)
+            while j > 0 and VPN_PROMO_RE.search(lines[j - 1]) and len(lines[j - 1]) <= 160:
+                j -= 1        # خط‌های پشت‌سرهمِ آخر پست که شبیه تبلیغ هستن
+            if j < len(lines) and any(STRONG_PROMO_RE.search(l) for l in lines[j:]):
+                lines = lines[:j]   # فقط اگه واقعاً تبلیغ فیلترشکن/کانفیگ بود پاک می‌شه
+            if not lines:
+                print("  VPN promo only, skipped")
+                continue
+            text = "\n".join(lines)
             kind = detect_pricelist(lines)
             if kind:
                 # لیست قیمت: ایموجی‌های داخل متن دست‌نخورده می‌مونه، فقط ایموجی اول عوض می‌شه
@@ -793,7 +875,7 @@ def fetch_tg(category, name, domestic):
                 paras = trim_trailing_emoji([x for x in (strip_sources(l) for l in lines[1:]) if x])
             else:
                 text = strip_emoji(text)  # ایموجی‌های خود کانال حذف می‌شه
-                lines = [l for l in text.split("\n") if l.strip()]
+                lines = strip_end_source([l for l in text.split("\n") if l.strip()])
                 if not lines or len(text) < 15:
                     continue
                 rest = lines[1:]
@@ -803,6 +885,9 @@ def fetch_tg(category, name, domestic):
                     rest = lines[2:]
                 paras = [x for x in clean_paras("\n".join(rest), 700) if x != title]
             if not title:
+                continue
+            if name in POLITICAL_SKIP_CHANNELS and not kind and is_political(title + " " + (paras[0] if paras else "")):
+                print("  political post, skipped:", title[:40])
                 continue
             ts = 0
             if p["dt"]:
@@ -837,9 +922,11 @@ def fetch_feed(category, url, domestic):
             title = clean(e.title, 200)
             if not title:
                 continue
+            if is_betting(title + " " + e.get("summary", "")):
+                continue
             if "euronews" in url and (re.match(r"\s*مجله[\s\u200c]*خبری", title) or "mglh-khbri" in (e.get("link") or "")):
                 continue   # «مجله خبری» یورونیوز منتشر نمی‌شه
-            paras = [p for p in clean_paras(e.get("summary", ""), 700) if p != title]
+            paras = strip_end_source([p for p in clean_paras(e.get("summary", ""), 700) if p != title])
             summary = " ".join(paras)
             if len(summary) < 20:
                 paras, summary = [], ""
