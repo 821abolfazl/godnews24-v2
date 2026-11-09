@@ -259,7 +259,7 @@ RED_SRC_RE = rx(r"پست[\s\u200c]*واشنگتن", r"واشنگتن[\s\u200c]*�
                 r"صابرین[\s\u200c]*نیوز", "المیادین", r"نیویورک[\s\u200c]*تایمز", r"New[\s\u200c]*York[\s\u200c]*Times",
                 "آکسیوس", "Axios", r"محسن[\s\u200c]*رضایی",
                 r"سی[\s\u200c]*ان[\s\u200c]*ان", "CNN", r"شبکه[\s\u200c]*(?:خبری[\s\u200c]*)?کان",
-                r"کان[\s\u200c]*(?:اسرائیل|اسراییل)", suffix=False)
+                r"کان[\s\u200c]*(?:اسرائیل|اسراییل)", "رویترز", "Reuters", suffix=False)
 PERSON_FLAGS = [
     (rx("نتانیاهو", "نتنیاهو", r"نتن[\s\u200c]*یاهو"), "IL"),
     (rx(r"کاخ[\s\u200c]*سفید"), "US"),
@@ -290,6 +290,7 @@ WEATHER_RE = rx("هواشناسی", r"پیش[\s\u200c]*بینی[\s\u200c]*هوا
                 "آفتابی", "ابری", "یخبندان", r"گرد[\s\u200c]*و[\s\u200c]*خاک")
 
 
+EDU_RE = rx(r"وزیر[\s\u200c]*علوم", "کنکور", "مدرسه", "مدارس")
 CIVIL_RE = rx("گواهینامه", r"گواهی[\s\u200c]*نامه", r"کارت[\s\u200c]*سوخت", r"تعویض[\s\u200c]*پلاک", "کالابرگ", r"کالا[\s\u200c]*برگ")
 AIR_RE = rx("پهپاد", "موشک", "هواپیما", "جنگنده", "بالگرد", r"هلی[\s\u200c]*کوپتر")
 MISSILE_DRONE_RE = rx("پهپاد", "موشک")
@@ -408,7 +409,7 @@ def decide(item):
         return "🔴", MARKER["🔴"]
     if YELLOW_RE.search(full):
         return "🟡", MARKER["🟡"]
-    if PETROL_RE.search(full) or CIVIL_RE.search(full) or (
+    if PETROL_RE.search(full) or CIVIL_RE.search(full) or EDU_RE.search(full) or (
             (FOOD_RE.search(head) or FRUIT_RE.search(head)) and PRICE_CTX_RE.search(full)):
         return "🔵", MARKER["🔵"]
     if MOBILE_RE.search(head):
@@ -965,14 +966,35 @@ def fetch_feed(category, url, domestic):
 
 
 # ====== پروکسی‌ها ======
+PROXY_INFO = {"total": 0, "checked": 0}
+
+
+def fetch_remote_proxies():
+    """لیست پروکسی رو هر بار تازه از گیت‌هاب می‌خونه (اجرای حلقه‌ای یک ساعت با نسخه‌ی قدیمیِ فایل کار می‌کرد)."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        return None
+    ref = os.environ.get("GITHUB_REF_NAME", "main")
+    try:
+        r = requests.get(f"https://raw.githubusercontent.com/{repo}/{ref}/{PROXY_FILE}",
+                         headers={"Cache-Control": "no-cache"}, timeout=15)
+        if r.ok and r.text.strip():
+            return r.text
+    except requests.RequestException:
+        pass
+    return None
+
+
 def load_proxies():
-    links = []
-    if os.path.exists(PROXY_FILE):
+    text = fetch_remote_proxies()
+    if text is None and os.path.exists(PROXY_FILE):
         with open(PROXY_FILE, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    links.append(line.replace("tg://proxy?", "https://t.me/proxy?", 1))
+            text = f.read()
+    links = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            links.append(line.replace("tg://proxy?", "https://t.me/proxy?", 1))
     return links
 
 
@@ -986,8 +1008,8 @@ def proxy_alive(link):
         return False
 
 
-def prepare_proxies(want=15, max_checks=80):
-    """پروکسی‌ها رو هم‌زمان چک می‌کنه (سریع، تا ساعت‌های رایگان گیت‌هاب هدر نره)."""
+def prepare_proxies(max_checks=150):
+    """پروکسی‌ها رو هم‌زمان چک می‌کنه (سریع، تا ساعت‌های رایگان گیت‌هاب هدر نره). همه‌ی سالم‌ها استفاده می‌شن."""
     from concurrent.futures import ThreadPoolExecutor
     ALIVE.clear()
     links = load_proxies()
@@ -996,7 +1018,8 @@ def prepare_proxies(want=15, max_checks=80):
     if sample:
         with ThreadPoolExecutor(max_workers=20) as ex:
             ok = list(ex.map(proxy_alive, sample))
-        ALIVE.extend([l for l, good in zip(sample, ok) if good][:want])
+        ALIVE.extend(l for l, good in zip(sample, ok) if good)
+    PROXY_INFO["total"], PROXY_INFO["checked"] = len(links), len(sample)
     print(f"proxies: {len(links)} in file, {len(sample)} checked, {len(ALIVE)} alive")
 
 
@@ -1163,7 +1186,8 @@ def status_text(state):
         f"آخرین نوبت کانال‌ها: {fmt_ago(state.get('last_tg'))}",
         f"آخرین نوبت بقیه‌ی منابع: {fmt_ago(state.get('last_other'))}",
         f"امروز: {st.get('posted', 0)} پست | {st.get('ads', 0)} تبلیغ ردشده | {st.get('errors', 0)} خطا",
-        f"پروکسی سالم (آخرین چک): {state.get('alive_count', '—')}",
+        f"پروکسی سالم (آخرین چک): {state.get('alive_count', '—')} از {state.get('proxy_checked', '—')} بررسی‌شده "
+        f"({state.get('proxy_total', '—')} در فایل)",
         f"حالت حلقه: {'روشن' if LOOP_MINUTES > 0 else 'خاموش'}",
     ])
 
@@ -1606,8 +1630,11 @@ def run_once():
         print("ارسال متوقف شده (/pause)؛ با /resume ادامه پیدا می‌کنه.")
         return "paused"
 
-    run_tg = not only_night and (force or now - state.get("last_tg", 0) >= (TG_EVERY_MIN - SLACK_MIN) * 60)
-    run_other = not only_night and (force or now - state.get("last_other", 0) >= (OTHER_EVERY_MIN - SLACK_MIN) * 60)
+    # توی حالت حلقه، خودِ حلقه زمان رو تنظیم می‌کنه؛ پس تحمل تأخیر کوچیکه تا فاصله‌ها نامنظم نشن
+    slack = 1 if LOOP_MINUTES > 0 else SLACK_MIN
+    run_tg = not only_night and (force or now - state.get("last_tg", 0) >= (TG_EVERY_MIN - slack) * 60)
+    # «بقیه‌ی منابع» فقط همراه نوبت کانال‌ها می‌آد، نه جدا (که فاصله‌ها بهم نریزه)
+    run_other = not only_night and (force or (run_tg and now - state.get("last_other", 0) >= (OTHER_EVERY_MIN - slack) * 60))
 
     print(f"run: v={BOT_VERSION} event={os.environ.get('GITHUB_EVENT_NAME')} mode={os.environ.get('RUN_MODE')} "
           f"tehran={th:%H:%M} force={force} run_tg={run_tg} run_other={run_other} only_night={only_night}")
@@ -1624,13 +1651,14 @@ def run_once():
 
     prepare_proxies()
     state["alive_count"] = len(ALIVE)
+    state["proxy_total"], state["proxy_checked"] = PROXY_INFO["total"], PROXY_INFO["checked"]
     if ALIVE and len(ALIVE) < FEW_PROXIES:
         alert("fewproxy", f"⚠️ فقط {len(ALIVE)} پروکسی سالم مونده؛ proxies.txt را به‌روز کن.", 24)
     if ADMIN_CHAT_ID and not state.get("admin_hello"):
         if alert("hello", "✅ هشدارهای ربات GodNews24 فعال شد. اگه مشکلی پیش بیاد اینجا خبر می‌دم.", 0):
             state["admin_hello"] = True
     if not ALIVE:
-        total = len(load_proxies())
+        total = PROXY_INFO["total"]
         alert("noproxy", "⚠️ پروکسی سالمی پیدا نشد؛ فایل proxies.txt را به‌روز کن."
               if total else "⚠️ فایل proxies.txt خالی است و پروکسی ندارم.", 12)
     state.setdefault("last_post", now)
