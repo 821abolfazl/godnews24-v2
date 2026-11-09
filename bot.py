@@ -1,5 +1,5 @@
-
 import os
+import sys
 import re
 import json
 import html
@@ -12,6 +12,11 @@ from urllib.parse import urlparse, parse_qs
 import feedparser
 
 # ====== تنظیمات ======
+BOT_VERSION = "2026-11-09-b"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+try:
+    sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
+except Exception:
+    pass
 TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = os.environ.get("CHANNEL", "@GodNews24")
 
@@ -243,6 +248,8 @@ def flags_for(title, limit=3):
 
 # ====== کلمه‌های اجباری، منبع‌های 🔴 و شخص‌ها ======
 RED_RE = rx("جنگ", "سپاه", "ترامپ", r"کمیسیون[\s\u200c]+امنیت[\s\u200c]+ملی", r"رضا[\s\u200c]*پهلوی", r"تریتا[\s\u200c]*(?:پارسی|فارسی)", r"Trita[\s\u200c]*Parsi", "عراقچی", "Araghchi",
+            r"سخنگوی[\s\u200c]+وزارت[\s\u200c]+(?:امور[\s\u200c]+)?خارجه", "بقایی",
+            r"لحظات[\s\u200c]+اولیه[\s\u200c]+هدف[\s\u200c]+قرار[\s\u200c]+گرفت(?:ن)?",
             "هگست", "هگسث", "هیگست", "روبیو")
 YELLOW_RE = re.compile(rf"(?<![{_L}])(?:بورس|فارکس|ارز(?:ها|های)?[\s\u200c]*دیجی?تال|کریپتو|رمز[\s\u200c]*ارز)")
 RED_SRC_RE = rx(r"پست[\s\u200c]*واشنگتن", r"واشنگتن[\s\u200c]*پست", r"Washington[\s\u200c]*Post", "الجزایر", "الجزیره", r"فاکس[\s\u200c]*نیوز", r"Fox[\s\u200c]*News", r"کانال[\s\u200c]*(?:۱۴|14)",
@@ -1149,6 +1156,7 @@ def fmt_ago(ts):
 def status_text(state):
     st = state.get("stats") or {}
     return "\n".join([
+        f"🤖 نسخه‌ی ربات: {BOT_VERSION}",
         f"🕒 ساعت تهران: {tehran_now():%H:%M}",
         "⏸ ارسال متوقفه" if state.get("paused") else "▶️ ارسال فعاله",
         f"آخرین پست: {fmt_ago(state.get('last_post'))}",
@@ -1601,7 +1609,7 @@ def run_once():
     run_tg = not only_night and (force or now - state.get("last_tg", 0) >= (TG_EVERY_MIN - SLACK_MIN) * 60)
     run_other = not only_night and (force or now - state.get("last_other", 0) >= (OTHER_EVERY_MIN - SLACK_MIN) * 60)
 
-    print(f"run: event={os.environ.get('GITHUB_EVENT_NAME')} mode={os.environ.get('RUN_MODE')} "
+    print(f"run: v={BOT_VERSION} event={os.environ.get('GITHUB_EVENT_NAME')} mode={os.environ.get('RUN_MODE')} "
           f"tehran={th:%H:%M} force={force} run_tg={run_tg} run_other={run_other} only_night={only_night}")
     if not (run_tg or run_other or only_night):
         since = (now - state.get("last_tg", 0)) / 60
@@ -1849,7 +1857,14 @@ def dispatch_next():
         alert("dispatch", "⚠️ صدا زدن اجرای بعدی ناموفق بود. اگه ربات متوقف شد، Run workflow با mode=auto بزن.", 0)
 
 
+def seconds_until_active():
+    th = tehran_now()
+    m = th.hour * 60 + th.minute
+    return max(((QUIET_END - m) % 1440) * 60 - th.second, 30)
+
+
 def main():
+    print(f"نسخه‌ی ربات: {BOT_VERSION}")
     loop_minutes = LOOP_MINUTES
     if loop_minutes > 0 and (is_force_run() or not repo_is_public()):
         if not is_force_run():
@@ -1864,7 +1879,6 @@ def main():
         run_once()
         return
     end = time.time() + loop_minutes * 60
-    quiet = False
     while True:
         t0 = time.time()
         status = None
@@ -1875,28 +1889,28 @@ def main():
             alert("loop_error", f"❌ خطا در یک دور ربات: {repr(ex)[:300]}", 1)
         commit_state()
         if status == "quiet":
-            print("ساعت سکوت شد؛ حلقه تموم می‌شه.")
-            quiet = True
-            break
-        if status == "night_wait":
+            nxt = time.time() + seconds_until_active()
+            print("ساعت سکوت؛ ربات بیدار می‌مونه (فرمان‌ها رو می‌خونه) تا ساعت ۰۸:۳۰.")
+        elif status == "night_wait":
             nxt = time.time() + 300
         elif status == "paused":
             nxt = time.time() + 120
         else:
             nxt = next_round_time(t0)
-        if nxt > end + 300:
-            break
-        wait = nxt - time.time()
-        print(f"دور بعدی تا {wait / 60:.0f} دقیقه‌ی دیگه.")
-        wake = time.time() + max(wait, 0)
+        stop = nxt > end + 300           # دور بعدی بعد از پایان این اجراست
+        wake = min(nxt, end) if stop else nxt
+        wait = wake - time.time()
+        if wait > 0:
+            print(f"دور بعدی تا {wait / 60:.0f} دقیقه‌ی دیگه.")
         while time.time() < wake:
             time.sleep(min(POLL_SECONDS, max(wake - time.time(), 0)))
             try:
                 poll_commands()   # در این فاصله فرمان‌های ادمین هم خونده می‌شه
             except Exception as ex:
                 print("command poll error:", repr(ex))
-    if not quiet:
-        dispatch_next()
+        if stop:
+            break
+    dispatch_next()
 
 
 if __name__ == "__main__":
