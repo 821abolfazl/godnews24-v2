@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import calendar
 import json
 import html
 import time
@@ -12,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-09-b"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-10-a"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -109,6 +110,7 @@ SRC = (r"(?:CNN|سی\s?ان\s?ان|شبکه\s?(?:خبری\s?)?کان|صابری�
 AG = r"(?:خبرگزاری\s+|پایگاه\s+خبری\s+|سایت\s+|روزنامه\s+|خبرنگار\s+|سرویس\s+\S+\s+)?"
 
 SOURCE_RULES = [
+    re.compile(r"\s*/\s*ایسنا(?=[\s.،]*$)"),   # «... / ایسنا» آخر متن: فقط همین کلمه پاک می‌شه (نقطه‌ی بعدش می‌مونه)
     re.compile(r"(?:به\s+گزارش|به\s+نقل\s+از|بنا\s?بر\s+گزارش|طبق\s+گزارش|بر\s?اساس\s+گزارش)\s+"
                + AG + SRC + r"[\s،,:؛\-–—]*"),
     re.compile(r"(?:خبرنگار|خبرگزاری)\s+" + SRC + r"[\s،,:؛\-–—]*"),
@@ -657,7 +659,7 @@ def tehran_now():
     return datetime.now(timezone.utc) + timedelta(hours=3, minutes=30)
 
 
-CHANNEL_SKIP_FROM, CHANNEL_SKIP_TO = 1 * 60, 7 * 60   # پست‌های کانال‌ها بین ۰۱:۰۰ تا ۰۷:۰۰ تهران استفاده نمی‌شن
+CHANNEL_SKIP_FROM, CHANNEL_SKIP_TO = 1 * 60, 6 * 60   # پست‌هایی که بین ۰۱:۰۰ تا ۰۶:۰۰ تهران منتشر شدن (از همه‌ی منبع‌ها) ارسال نمی‌شن
 
 
 def in_skip_hours(ts):
@@ -760,6 +762,17 @@ def fetch_kiosk(pages):
 
 # ====== فیلتر تبلیغ و پست‌های ممنوع کانال‌ها ======
 CHANNEL_SKIP_WORDS = {"arz_talaaa": ["صبحبخیر", "شببخیر"]}   # بدون فاصله
+GREETING_KEYS = ("صبحبخیر", "شببخیر", "صبحتونبخیر", "شبتونبخیر", "صبحشمابخیر", "شبشمابخیر", "صبحتانبخیر", "شبتانبخیر")
+
+
+def is_greeting_post(text):
+    """پیام صبح بخیر/شب بخیر (جز کیوسک) منتشر نمی‌شه. متن بلندِ خبری که فقط یک‌جا این عبارت رو داره حساب نمی‌شه."""
+    key = re.sub(r"[\s\u200c_\-،,.!؟?؛:]+", "", text or "")
+    pos = [key.find(g) for g in GREETING_KEYS if g in key]
+    if not pos:
+        return False
+    return len(key) < 400 or min(pos) < 80
+
 WATCH_LINK_RE = re.compile(r"<a\b[^>]*>(.*?)</a>", re.S | re.I)
 TRAIL_EMOJI_RE = re.compile("[" + EMOJI_CHARS + r"\s]+$")
 
@@ -859,9 +872,9 @@ def fetch_tg(category, name, domestic):
                 print("  betting ad, skipped:", raw[:30].replace("\n", " "))
                 log_rejected(name, "تبلیغ شرط‌بندی", raw, p["post_id"])
                 continue
-            if any(w in key for w in CHANNEL_SKIP_WORDS.get(name, ())):
+            if is_greeting_post(raw) or any(w in key for w in CHANNEL_SKIP_WORDS.get(name, ())):
                 print("  greeting post, skipped:", raw[:30].replace("\n", " "))
-                log_rejected(name, "پیام صبح/شب بخیر", raw, p["post_id"])
+                log_rejected(name, "پیام صبح/شب بخیر (غیر از کیوسک)", raw, p["post_id"])
                 continue
             if has_watch_link(p.get("html")):
                 print("  'مشاهده فیلم' link, skipped:", raw[:30].replace("\n", " "))
@@ -925,7 +938,7 @@ def fetch_tg(category, name, domestic):
         READ_STATUS[name] = 0
     AD_STATS[name] = (ads, len(posts))
     items.sort(key=lambda x: x["ts"])
-    print(f"{len(items):3d} items  tg:{name}" + (f"  ({skipped_night} پست ساعت ۰۱ تا ۰۷ رد شد)" if skipped_night else "")
+    print(f"{len(items):3d} items  tg:{name}" + (f"  ({skipped_night} پست ساعت ۰۱ تا ۰۶ رد شد)" if skipped_night else "")
           + (f"  ({ads} تبلیغ رد شد)" if ads else ""))
     return items
 
@@ -934,6 +947,7 @@ def fetch_feed(category, url, domestic):
     if url.startswith("tg:"):
         return fetch_tg(category, url[3:], domestic)
     items = []
+    night_skipped = 0
     try:
         feed = feedparser.parse(url, request_headers={"User-Agent": "Mozilla/5.0"})
         for e in feed.entries:
@@ -946,13 +960,19 @@ def fetch_feed(category, url, domestic):
             if is_betting(title + " " + e.get("summary", "")):
                 log_rejected(urlparse(url).netloc, "تبلیغ شرط‌بندی", title)
                 continue
+            if is_greeting_post(title + " " + e.get("summary", "")):
+                log_rejected(urlparse(url).netloc, "پیام صبح/شب بخیر (غیر از کیوسک)", title)
+                continue
             if "euronews" in url and (re.match(r"\s*مجله[\s\u200c]*خبری", title) or "mglh-khbri" in (e.get("link") or "")):
                 continue   # «مجله خبری» یورونیوز منتشر نمی‌شه
             paras = strip_end_source([p for p in clean_paras(e.get("summary", ""), 700) if p != title])
             summary = " ".join(paras)
             if len(summary) < 20:
                 paras, summary = [], ""
-            ts = time.mktime(e.published_parsed) if e.get("published_parsed") else 0
+            ts = calendar.timegm(e.published_parsed) if e.get("published_parsed") else 0
+            if ts and in_skip_hours(ts):
+                night_skipped += 1
+                continue
             image, video = find_media(e)
             items.append({"id": uid, "title": title, "summary": summary, "paras": paras,
                           "category": category, "domestic": domestic, "image": image, "video": video, "ts": ts,
@@ -961,7 +981,7 @@ def fetch_feed(category, url, domestic):
         print("feed error:", url, ex)
     RSS_READ[url] = len(items)
     items.sort(key=lambda x: x["ts"])
-    print(f"{len(items):3d} items  {url}")
+    print(f"{len(items):3d} items  {url}" + (f"  ({night_skipped} خبر ساعت ۰۱ تا ۰۶ رد شد)" if night_skipped else ""))
     return items
 
 
@@ -1209,31 +1229,37 @@ def test_text():
 
 
 def rejected_text(state, mode):
-    log = state.get("rejected") or []
-    if mode == "ads":
-        rows, title = [e for e in log if e["why"].startswith("تبلیغ")], "🚫 آخرین پست‌های تبلیغاتیِ ردشده"
-    elif mode == "errors":
-        rows, title = [e for e in log if e["why"].startswith("خطا")], "❌ آخرین پست‌هایی که ارسالشون خطا داد"
+    today = rejected_day()
+    log = [e for e in (state.get("rejected") or []) if e.get("day") == today]   # فقط پست‌های امروز
+    if mode == "errors":
+        rows, title = [e for e in log if e["why"].startswith("خطا")], "❌ پست‌هایی که امروز ارسالشون خطا داد"
     else:
-        rows, title = log, "📋 آخرین پست‌های ردشده"
-    rows = rows[-15:][::-1]
+        rows, title = log, "📋 پست‌های ردشده‌ی امروز (تبلیغ و بقیه)"
     if not rows:
         return [title + "\n\nمورد ثبت‌شده‌ای نیست."]
-    chunks, cur = [], title + f" ({len(rows)} مورد)\n"
-    for i, e in enumerate(rows, 1):
+    counts = {}
+    for e in rows:
+        g = "تبلیغ" if e["why"].startswith("تبلیغ") else e["why"]
+        counts[g] = counts.get(g, 0) + 1
+    shown = rows[-40:][::-1]
+    head = f"{title}\nمجموع: {len(rows)} | " + "، ".join(f"{k}: {v}" for k, v in counts.items()) + "\n"
+    chunks, cur = [], head
+    for i, e in enumerate(shown, 1):
         line = (f"\n{i}) [{e['src']}] {tehran_hm(e['t'])} — {e['why']}\n«{e['text']}»"
                 + (f"\n⚠️ {e['extra']}" if e.get("extra") else "") + (f"\n{e['link']}" if e.get("link") else "") + "\n")
         if len(cur) + len(line) > 3500:
             chunks.append(cur)
             cur = ""
         cur += line
+    if len(rows) > len(shown):
+        cur += f"\n… و {len(rows) - len(shown)} مورد قدیمی‌تر\n"
     chunks.append(cur)
     return chunks
 
 
 HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای\n/pause ← توقف ارسال به کانال\n/resume ← ادامه‌ی ارسال\n"
-             "/ads ← پست‌های تبلیغاتیِ ردشده\n/errors ← پست‌هایی که ارسالشون خطا داد\n"
-             "/skipped ← همه‌ی پست‌های ردشده (تبلیغ، کلمه‌ی ممنوع، سیاسی، شوخی و...)\n"
+             "/skipped ← همه‌ی پست‌های ردشده‌ی امروز (تبلیغ، کلمه‌ی ممنوع، سیاسی، شوخی و...)\n"
+             "/errors ← پست‌هایی که امروز ارسالشون خطا داد\n"
              "/test ← بررسی دسترسی ربات به کانال و نمونه‌ی قالب پست")
 
 
@@ -1307,6 +1333,10 @@ def tehran_hm(ts):
     return f"{t:%H:%M}"
 
 
+def rejected_day():
+    return (tehran_now() - timedelta(hours=8, minutes=30)).strftime("%Y-%m-%d")   # لیست‌ها هر روز ساعت ۰۸:۳۰ تهران (با «صبح بخیر») از نو شروع می‌شن
+
+
 def log_rejected(src, why, text, post_id=None, extra=""):
     """پست ردشده یا ناموفق رو برای دستورهای /ads و /errors و /skipped ثبت می‌کنه (هر پست فقط یک بار)."""
     st = STATE_REF[0]
@@ -1316,7 +1346,7 @@ def log_rejected(src, why, text, post_id=None, extra=""):
     key = f"{src}/{post_id}" if post_id else f"{src}:{why}:{(text or '')[:40]}"
     if any(e.get("k") == key for e in log):
         return
-    log.append({"k": key, "t": int(time.time()), "src": src, "why": why,
+    log.append({"k": key, "t": int(time.time()), "day": rejected_day(), "src": src, "why": why,
                 "text": re.sub(r"\s+", " ", text or "").strip()[:140],
                 "link": f"https://t.me/{post_id}" if post_id else "", "extra": (extra or "")[:120]})
     del log[:-80]
@@ -1699,6 +1729,9 @@ def run_once():
         p = pick("night", 6)
         if p:
             post.append(("night", p))
+
+    if any(k == "morning" for k, _ in pre):
+        state["rejected"] = []   # با «صبح بخیر» کیوسک (اولین پیام روز) لیست ردشده‌های دیروز پاک می‌شه
 
     # ---- بقیه‌ی منابع
     tg_feeds = [f for f in FEEDS if f[1].startswith("tg:")]
