@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-12-d"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-12-e"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1423,9 +1423,6 @@ def status_text(state):
         f"({state.get('proxy_total', '—')} در فایل)",
         f"حالت حلقه: {'روشن' if LOOP_MINUTES > 0 else 'خاموش'}",
     ]
-    _b = state.get("price_board") or {}
-    if _b.get("msg_id"):
-        lines.append(f"📌 تابلو قیمت: پیام {_b['msg_id']} | آخرین به‌روزرسانی {fmt_ago(_b.get('updated'))}")
     _dg = state.get("digests") or {}
     _dg_day = (tehran_now() - timedelta(hours=8)).strftime("%Y-%m-%d")
     if _dg.get("day") == _dg_day:
@@ -1507,7 +1504,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/test ← بررسی دسترسی ربات به کانال و نمونه‌ی قالب پست\n"
              "/send متن ← ارسال متن دلخواه به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع ← بی‌صدا کردن موقت یک منبع\n/unmute منبع ← برگردوندن منبع\n/muted ← لیست منبع‌های بی‌صدا\n"
-             "/stats ← آمار ۷ روز اخیر\n/board ← تازه کردن تابلو قیمت پین‌شده\n"
+             "/stats ← آمار ۷ روز اخیر\n"
              "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی")
 
 
@@ -1547,17 +1544,6 @@ def handle_command(state, cmd, full_text=""):
         admin_send(status_text(state))
     elif cmd == "/stats":
         admin_send(stats_text(state))
-    elif cmd == "/board":
-        b = state.get("price_board") or {}
-        if not b.get("msg_id") or not b.get("prices"):
-            admin_send("📌 هنوز تابلو قیمت ساخته نشده؛ با اولین لیست قیمت تازه ساخته می‌شه.")
-        elif tg("editMessageText", message_id=b["msg_id"],
-                text=build_price_board_text(b["prices"], tehran_now().strftime("%H:%M")),
-                disable_web_page_preview="true"):
-            b["updated"] = time.time()
-            admin_send("✅ تابلو قیمت تازه شد.")
-        else:
-            admin_send("❌ ویرایش تابلو نشد؛ شاید پیام پاک شده. با لیست قیمت بعدی یکی تازه ساخته می‌شه.")
     elif cmd == "/rules":
         r = DYNAMIC_RULES
         lines = ["📜 قوانین فعلی (rules.txt):"]
@@ -1982,117 +1968,6 @@ def send_special(text, media, proxy):
         PARSE_MODE[0] = "HTML"
 
 
-# ====== تابلو قیمت پین‌شده (نسخه‌ی c) ======
-# یک پیام پین‌شده بالای کانال که قیمت‌های لیست تازه‌ی ارز و طلا رو نشون می‌ده
-# و با هر لیست قیمت تازه، به‌جای پست جدید، ویرایش می‌شه. خرابیِ تابلو هیچ‌وقت
-# ارسال خبرها رو خراب نمی‌کنه: همه‌ی فراخوانی‌ها داخل try/except هستن.
-_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-_PRICE_BOARD_ROWS = [
-    # (کلید، برچسب نمایشی، کلمه‌های خط قیمت، کلمه‌هایی که خط رو رد می‌کنن)
-    ("dollar", "💵 دلار", ("دلار",), ("کانادا", "استرالیا")),
-    ("euro", "💶 یورو", ("یورو",), ()),
-    ("gold18", "🟡 طلای ۱۸ عیار", ("طلای ۱۸ عیار", "طلای 18 عیار", "طلا ۱۸ عیار", "طلا 18 عیار"), ()),
-    ("coin", "🪙 سکه تمام", ("سکه تمام", "سکه امامی", "سکه بهار"), ()),
-    ("tether", "💲 تتر", ("تتر",), ()),
-    ("bitcoin", "₿ بیت‌کوین", ("بیت‌کوین", "بیت کوین", "بیتکوین"), ()),
-]
-_PRICE_BOARD_MIN_ROWS = 2      # با کمتر از این تعداد قیمت، تابلو ساخته نمی‌شه
-_PRICE_BOARD_REFRESH_MIN = 60  # اگه قیمت عوض نشده ولی این‌قدر گذشته، ساعت تابلو تازه می‌شه
-
-
-def _fa_num(n):
-    """عدد رو با رقم‌های فارسی و جداکننده‌ی هزارگان برمی‌گردونه: 109200 -> ۱۰۹٬۲۰۰"""
-    s = f"{int(n):,}".replace(",", "٬")
-    return s.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
-
-
-def _price_number(line):
-    """قیمت رو از یک خط لیست قیمت درمی‌آره (ارقام فارسی/عربی/لاتین).
-    آخرین عددِ حداقل ۴ رقمی خط برمی‌گرده؛ مثلاً «طلای ۱۸ عیار: ۱۰٬۵۰۰٬۰۰۰ تومان»
-    عدد ۱۸ رو رد می‌کنه و ۱۰۵۰۰۰۰۰ رو برمی‌گردونه. اگه عددی نبود None."""
-    nums = []
-    for tok in re.findall(r"[0-9۰-۹٠-٩][0-9۰-۹٠-٩,٬،. ]*[0-9۰-۹٠-٩]|[0-9۰-۹٠-٩]", line):
-        digits = tok.translate(_FA_DIGITS).replace(",", "").replace("٬", "").replace("،", "").replace(".", "").replace(" ", "")
-        if digits.isdigit():
-            nums.append(int(digits))
-    big = [n for n in nums if n >= 1000]
-    if big:
-        return big[-1]
-    return nums[-1] if nums else None
-
-
-def extract_board_prices(text):
-    """از متن یک لیست قیمت (تیتر + پاراگراف‌ها) قیمت‌های تابلو رو درمی‌آره.
-    خروجی: dict مثل {"dollar": 109200, ...} — فقط ردیف‌هایی که پیدا شدن."""
-    prices = {}
-    lines = [l.strip() for l in (text or "").split("\n") if l.strip()]
-    for key, _label, keywords, skip_words in _PRICE_BOARD_ROWS:
-        for line in lines:
-            if any(w in line for w in skip_words):
-                continue
-            if any(k in line for k in keywords):
-                v = _price_number(line)
-                if v:
-                    prices[key] = v
-                    break
-    return prices
-
-
-def build_price_board_text(prices, when_hm):
-    """متن تابلو قیمت رو می‌سازه. متن ساده‌ست (بدون تگ HTML) تا parse نشه."""
-    lines = [f"📌 تابلو قیمت — {CHANNEL}"]
-    for key, label, _kw, _skip in _PRICE_BOARD_ROWS:
-        if key in prices:
-            unit = "دلار" if key == "bitcoin" else "تومان"
-            lines.append(f"{label}: {_fa_num(prices[key])} {unit}")
-    lines.append(f"🕒 به‌روز شده: {when_hm}")
-    lines.append("قیمت‌ها از لیست ارز و طلا؛ با هر نوبت ربات تازه می‌شود.")
-    return "\n".join(lines)
-
-
-def update_price_board(state, items, day_id, th):
-    """اگه این نوبت لیست قیمت تازه‌ای (kind=money) پست شده، تابلو رو تازه می‌کنه:
-    همون روز پیام پین‌شده ویرایش می‌شه، روز جدید (یا اگه پیام پاک شده بود) پیام
-    تازه فرستاده و پین می‌شه. False یعنی تابلو عوض نشد؛ خطا هیچ‌وقت بالا نمی‌آد."""
-    try:
-        money = [i for i in (items or []) if i.get("kind") == "money"]
-        if not money:
-            return False
-        latest = max(money, key=lambda x: x.get("ts", 0))
-        text = (latest.get("title", "") + "\n" + "\n".join(latest.get("paras") or [])).strip()
-        prices = extract_board_prices(text)
-        if len(prices) < _PRICE_BOARD_MIN_ROWS:
-            print(f"price board skipped: only {len(prices)} prices in latest money list")
-            return False
-        board = state.get("price_board") or {}
-        now = time.time()
-        when_hm = f"{th:%H:%M}"
-        if board.get("msg_id") and board.get("day") == day_id:
-            if board.get("prices") == prices and now - (board.get("updated") or 0) < _PRICE_BOARD_REFRESH_MIN * 60:
-                return False
-            if tg("editMessageText", message_id=board["msg_id"], text=build_price_board_text(prices, when_hm),
-                  disable_web_page_preview="true"):
-                board.update({"prices": prices, "updated": now})
-                state["price_board"] = board
-                print("price board edited:", board["msg_id"])
-                return True
-            print("price board edit failed; sending a new one")
-        LAST_TG_IDS.clear()
-        if not tg("sendMessage", text=build_price_board_text(prices, when_hm), disable_web_page_preview="true"):
-            return False
-        msg_id = LAST_TG_IDS[-1] if LAST_TG_IDS else None
-        if not msg_id:
-            return False
-        if not tg("pinChatMessage", message_id=msg_id, disable_notification="true"):
-            print("price board pin failed (message sent anyway):", msg_id)
-        state["price_board"] = {"msg_id": msg_id, "day": day_id, "prices": prices, "updated": now}
-        print("price board sent+pinned:", msg_id)
-        return True
-    except Exception as ex:
-        print("price board error:", repr(ex))
-        return False
-
-
 # ====== خلاصه‌ی صبحانه و شام خبری (نسخه‌ی d) ======
 # هر خبر معمولیِ موفق در state["today_top"] ثبت می‌شه (حداکثر ۵۰ تا؛ لیست قیمت
 # و کیوسک ثبت نمی‌شن). با عوض شدن «روز» کانال، today_top به prev_top منتقل می‌شه
@@ -2345,9 +2220,6 @@ def merge_remote_state(state, remote):
     state["muted_sources"] = list(dict.fromkeys(list(state.get("muted_sources") or []) + list(remote.get("muted_sources") or [])))
     if remote.get("last_post_ids"):
         state["last_post_ids"] = list(dict.fromkeys(list(state.get("last_post_ids") or []) + list(remote.get("last_post_ids") or [])))[-10:]
-    rb, lb = remote.get("price_board") or {}, state.get("price_board") or {}
-    if rb.get("msg_id") and (rb.get("updated") or 0) > (lb.get("updated") or 0):
-        state["price_board"] = rb   # تابلو قیمت تازه‌تر از دور قبلی رو نگه دار
     # خبرهای مهم روز (برای صبحانه/شام خبری): اگه روزشون فرق داشت، تازه‌تر می‌مونه؛
     # اگه هم‌روز بودن، با هم ادغام می‌شن تا چیزی گم نشه
     for _key in ("today_top", "prev_top"):
@@ -2610,10 +2482,6 @@ def run_once():
                     save_state(state)
             except Exception as ex:
                 print("morning digest error:", repr(ex))
-
-        # تابلو قیمت پین‌شده: با لیست قیمت تازه‌ی همین نوبت تازه می‌شه (خرابی‌ش خبرها رو خراب نمی‌کنه)
-        if update_price_board(state, to_post, day_id, th):
-            save_state(state)
 
         # شام خبری: ۲۳:۰۰ تا ۰۰:۴۵ تهران، همیشه قبل از «شب بخیر»؛ اگه اجرا دیر شروع شد
         # (نوبت شب بخیر یا only_night) و شام هنوز نرفته بود، همین‌جا قبل از شب بخیر می‌ره
