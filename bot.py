@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-12-e"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-12-f"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1505,7 +1505,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/send متن ← ارسال متن دلخواه به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع ← بی‌صدا کردن موقت یک منبع\n/unmute منبع ← برگردوندن منبع\n/muted ← لیست منبع‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
-             "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی")
+             "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن")
 
 
 # ====== دستورهای جدید: /send /delete /mute /stats /rules ======
@@ -1582,15 +1582,50 @@ def handle_command(state, cmd, full_text=""):
                 except Exception as ex:
                     print("save rules error:", ex)
                 admin_send(f"✅ «{w}» به {emoji} اضافه شد.")
+    elif cmd == "/strip":
+        ph = arg.strip()
+        if len(ph) < 3:
+            admin_send("عبارت باید حداقل ۳ حرف باشد. مثال: /strip / ایسنا")
+        elif any((x or "").strip() == ph for x in DYNAMIC_RULES.get("strip_end", [])):
+            admin_send(f"«{ph}» همین حالا هم در پاک‌شونده‌های آخر متن است.")
+        else:
+            DYNAMIC_RULES.setdefault("strip_end", []).append(ph)
+            try:
+                save_rules_file(); commit_rules()
+            except Exception as ex:
+                print("save rules error:", ex)
+            admin_send(f"✅ «{ph}» به پاک‌شونده‌های آخر متن اضافه شد.")
+    elif cmd == "/unstrip":
+        ph = arg.strip()
+        if not ph:
+            admin_send("عبارت را هم بفرست. مثال: /unstrip / ایسنا")
+        elif not any((x or "").strip() == ph for x in DYNAMIC_RULES.get("strip_end", [])):
+            admin_send(f"«{ph}» در پاک‌شونده‌های آخر متن نیست.")
+        else:
+            DYNAMIC_RULES["strip_end"] = [x for x in DYNAMIC_RULES.get("strip_end", []) if (x or "").strip() != ph]
+            try:
+                save_rules_file(); commit_rules()
+            except Exception as ex:
+                print("save rules error:", ex)
+            admin_send(f"✅ «{ph}» از پاک‌شونده‌های آخر متن حذف شد.")
     elif cmd == "/send":
         if not arg:
             admin_send("متن را هم بفرست. مثال: /send سلام به کانال")
             return
+        text = arg.rstrip()
+        if not text.endswith(CHANNEL):
+            # آخر متن: پروکسی (متن ساده، چون /send متن ساده می‌فرسته) و بعد @GodNews24
+            p_plain = proxy_parts()[1]
+            tail = []
+            if "://" in p_plain:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
+                tail.append(p_plain)
+            tail.append(CHANNEL)
+            text = text + "\n\n" + "\n".join(tail)
         LAST_TG_IDS.clear()
         old_mode = PARSE_MODE[0]
         PARSE_MODE[0] = None
         try:
-            ok = tg("sendMessage", text=arg, disable_web_page_preview="true")
+            ok = tg("sendMessage", text=text, disable_web_page_preview="true")
         finally:
             PARSE_MODE[0] = old_mode
         if ok:
