@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-10-a"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-12-b"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -25,6 +25,11 @@ CHANNEL = os.environ.get("CHANNEL", "@GodNews24")
 PROXY_LINK = ""          # لینک پیش‌فرض (اگه فایل پروکسی خالی بود)
 PROXY_FILE = "proxies.txt"  # هر خط یک لینک پروکسی
 ALIVE = []               # پروکسی‌های سالمِ همین اجرا
+RULES_FILE = "rules.txt"  # قوانین قابل ویرایش (ممنوع، ایموجی‌ها، پاک‌شدن از آخر متن)
+LAST_TG_IDS = []  # message_idهای آخرین ارسال موفق تلگرام در همین فراخوان tg()
+DYNAMIC_RULES = {"blocked": ["خوشچشم", "عوستاد", "رائفیپور", "رایفیپور", "عرزشی"], "red": ["سپاه", "ترامپ", "رویترز"], "yellow": ["بورس", "کریپتو"], "blue": ["کنکور", "مدرسه", "بنزین"], "strip_end": ["/ ایسنا", "| صداوسیما"]}
+DYNAMIC_RULES_PREV = None  # نسخه‌ی قبلی قوانین، برای ایمنی
+RULES_BLOCKED_SUSPENDED = [False]
 
 STATE_FILE = "posted.json"
 TG_EVERY_MIN = 20        # کانال‌های تلگرامی: هر ۲۰ دقیقه
@@ -78,17 +83,34 @@ SPORT_KW = ["فوتبال", "لیگ", "جام جهانی", "بازیکن", "مر
             "والیبال", "کشتی", "بسکتبال", "پرسپولیس", "استقلال", "گل زد"]
 
 
+def _word_pat(w):
+    parts = (w or "").strip().split()
+    return r"[\s\u200c]*".join(re.escape(x) for x in parts) if parts else ""
+
+def _dyn_re(kind):
+    words = [w for w in DYNAMIC_RULES.get(kind, []) if len((w or "").strip()) >= 3]
+    if not words:
+        return None
+    try:
+        return rx(*[_word_pat(w) for w in words])
+    except Exception:
+        return None
+
+def _dyn_match(kind, text):
+    r = _dyn_re(kind)
+    return bool(r and r.search(text or ""))
+
 def pick_emoji(category, title, body=""):
     # ورزشی و فناوری و معمولی: 🔵
     if category in ("sports", "tech") or any(k in title for k in SPORT_KW):
         return "🔵"
     full = title + " " + body
     # کلمه‌های اجباری: اگه توی تیتر باشه 🔴 اول، بعد 🟡؛ اگه فقط توی متن باشه 🟡 اول، بعد 🔴
-    if RED_RE.search(title):
+    if RED_RE.search(title) or _dyn_match("red", title):
         return "🔴"
-    if YELLOW_RE.search(title) or YELLOW_RE.search(full):
+    if YELLOW_RE.search(title) or YELLOW_RE.search(full) or _dyn_match("yellow", title) or _dyn_match("yellow", full):
         return "🟡"
-    if RED_RE.search(full):
+    if RED_RE.search(full) or _dyn_match("red", full):
         return "🔴"
     # سیاسی و مهم و فوری: 🔴
     if any(k in title for k in FLASH_KW):
@@ -122,9 +144,29 @@ SOURCE_RULES = [
 ]
 
 
+SEDAVASIMA_END_RE = re.compile(r"\s*\|\s*صداوسیما\s*[.،]?\s*$")
+
+def strip_trailing_sedavasima(text):
+    """فقط «| صداوسیما» آخر متن رو پاک می‌کنه؛ وسط متن دست نمی‌خوره."""
+    return SEDAVASIMA_END_RE.sub("", text or "")
+
+def apply_dynamic_strip_end(text):
+    """عبارت‌های [پاک شود از آخر متن] فقط اگه آخر متن باشن پاک می‌شن."""
+    for phrase in list(DYNAMIC_RULES.get("strip_end", [])):
+        ph = (phrase or "").strip()
+        if len(ph) < 3:
+            continue
+        t = (text or "").rstrip(" \t\n.,،؛")
+        if t.endswith(ph):
+            text = t[:-len(ph)].rstrip(" \t\n.,،؛-–—|")
+    return text
+
 def strip_sources(text):
+    text = strip_trailing_sedavasima(text or "")
     for rule in SOURCE_RULES:
         text = rule.sub("", text)
+    text = strip_trailing_sedavasima(text)
+    text = apply_dynamic_strip_end(text)
     text = re.sub(r"\s{2,}", " ", text)
     return text.strip(" \n\t،,:؛-–—")
 
@@ -138,7 +180,7 @@ def clean(text, limit):
     return text
 
 
-def clean_paras(raw, limit=700):
+def clean_paras(raw, limit=3200):
     """متن رو به پاراگراف‌های تمیز (بدون منبع) تبدیل می‌کنه."""
     raw = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", raw or "")
     text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
@@ -407,10 +449,12 @@ def decide(item):
         cands.append((m.start(), "🔴"))
     if cands:
         return min(cands)[1], MARKER["🔴"]
-    if item.get("red_src") or RED_RE.search(full) or RED_SRC_RE.search(full):
+    if item.get("red_src") or RED_RE.search(full) or RED_SRC_RE.search(full) or _dyn_match("red", full):
         return "🔴", MARKER["🔴"]
-    if YELLOW_RE.search(full):
+    if YELLOW_RE.search(full) or _dyn_match("yellow", full):
         return "🟡", MARKER["🟡"]
+    if _dyn_match("blue", full):
+        return "🔵", MARKER["🔵"]
     if PETROL_RE.search(full) or CIVIL_RE.search(full) or EDU_RE.search(full) or (
             (FOOD_RE.search(head) or FRUIT_RE.search(head)) and PRICE_CTX_RE.search(full)):
         return "🔵", MARKER["🔵"]
@@ -557,8 +601,17 @@ CHANNEL_BLOCKED = {}
 
 def is_blocked(text, extra=()):
     key = re.sub(r"[\s\u200c_\-]", "", text)
-    words = [re.sub(r"[\s\u200c_\-]", "", w) for w in list(BLOCKED_WORDS) + list(extra)]
-    return any(w in key for w in words)
+    words = [re.sub(r"[\s\u200c_\-]", "", w) for w in list(BLOCKED_WORDS) + list(DYNAMIC_RULES.get("blocked", [])) + list(extra)]
+    if any(w and w in key for w in words):
+        return True
+    # تطبیق با مرز کلمه برای کلمه‌های پویا
+    try:
+        r = _dyn_re("blocked")
+        if r and r.search(text or ""):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def looks_like_joke(raw):
@@ -789,6 +842,11 @@ def strip_end_source(lines):
     """نام «واشنگتن پست» فقط وقتی به‌عنوان منبعِ آخر پست اومده پاک می‌شه؛ وسط متن دست‌نخورده می‌مونه."""
     lines = list(lines)
     if lines:
+        lines[-1] = strip_trailing_sedavasima(lines[-1])
+        lines[-1] = apply_dynamic_strip_end(lines[-1])
+        if not lines[-1].strip():
+            lines.pop()
+            return lines
         t = lines[-1]
         for rxp in WAPO_END_PATTERNS:
             t = rxp.sub("", t)
@@ -914,7 +972,7 @@ def fetch_tg(category, name, domestic):
                 if len(lines) > 1 and len(lines[0].split()) <= 2:   # مثلاً «فوری»: تیتر واقعی خط بعدیه
                     title = clean(lines[0] + " " + lines[1], 200)
                     rest = lines[2:]
-                paras = [x for x in clean_paras("\n".join(rest), 700) if x != title]
+                paras = [x for x in clean_paras("\n".join(rest), 3200) if x != title]
             if not title:
                 continue
             if name in POLITICAL_SKIP_CHANNELS and not kind and is_political(title + " " + (paras[0] if paras else "")):
@@ -965,7 +1023,7 @@ def fetch_feed(category, url, domestic):
                 continue
             if "euronews" in url and (re.match(r"\s*مجله[\s\u200c]*خبری", title) or "mglh-khbri" in (e.get("link") or "")):
                 continue   # «مجله خبری» یورونیوز منتشر نمی‌شه
-            paras = strip_end_source([p for p in clean_paras(e.get("summary", ""), 700) if p != title])
+            paras = strip_end_source([p for p in clean_paras(e.get("summary", ""), 3200) if p != title])
             summary = " ".join(paras)
             if len(summary) < 20:
                 paras, summary = [], ""
@@ -1043,6 +1101,125 @@ def prepare_proxies(max_checks=150):
     print(f"proxies: {len(links)} in file, {len(sample)} checked, {len(ALIVE)} alive")
 
 
+# ====== فایل قوانین قابل ویرایش (rules.txt) ======
+RULES_SECTIONS = {"[ممنوع]": "blocked", "[blocked]": "blocked", "[🔴]": "red", "[red]": "red", "[🟡]": "yellow", "[yellow]": "yellow", "[🔵]": "blue", "[blue]": "blue", "[پاک شود از آخر متن]": "strip_end", "[strip_end]": "strip_end"}
+RULES_SECTION_TITLES = {"blocked": "[ممنوع]", "red": "[🔴]", "yellow": "[🟡]", "blue": "[🔵]", "strip_end": "[پاک شود از آخر متن]"}
+
+def parse_rules_text(text):
+    out = {"blocked": [], "red": [], "yellow": [], "blue": [], "strip_end": []}
+    cur = None
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line in RULES_SECTIONS:
+            cur = RULES_SECTIONS[line]
+            continue
+        if cur is None:
+            continue
+        if cur == "strip_end":
+            if len(line) >= 3 and line not in out[cur]:
+                out[cur].append(line)
+        else:
+            if len(line.replace(" ", "").replace("\u200c", "")) >= 3 and line not in out[cur]:
+                out[cur].append(line)
+    return out
+
+def fetch_remote_rules():
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        return None
+    ref = os.environ.get("GITHUB_REF_NAME", "main")
+    try:
+        r = requests.get(f"https://raw.githubusercontent.com/{repo}/{ref}/{RULES_FILE}",
+                         headers={"Cache-Control": "no-cache"}, timeout=15)
+        if r.ok and r.text.strip():
+            return r.text
+    except requests.RequestException:
+        pass
+    return None
+
+def load_rules():
+    """rules.txt رو هر دور تازه می‌خونه (مثل proxies.txt). اگه خراب/نبود، قوانین قبلی می‌مونه."""
+    global DYNAMIC_RULES, DYNAMIC_RULES_PREV
+    text = fetch_remote_rules()
+    if text is None and os.path.exists(RULES_FILE):
+        try:
+            with open(RULES_FILE, encoding="utf-8") as f:
+                text = f.read()
+        except Exception as ex:
+            print("rules read error:", ex)
+            return DYNAMIC_RULES
+    if text is None:
+        return DYNAMIC_RULES
+    try:
+        parsed = parse_rules_text(text)
+    except Exception as ex:
+        print("rules parse error:", ex)
+        return DYNAMIC_RULES
+    # حداقل اعتبارسنجی: اگه هیچ بخشی پر نبود، فایل خراب حساب می‌شه
+    if not any(parsed.values()):
+        print("rules file empty/corrupt, keeping previous rules")
+        return DYNAMIC_RULES
+    DYNAMIC_RULES_PREV = dict(DYNAMIC_RULES)
+    DYNAMIC_RULES = parsed
+    print(f"rules loaded: blocked={len(parsed['blocked'])} red={len(parsed['red'])} yellow={len(parsed['yellow'])} blue={len(parsed['blue'])} strip_end={len(parsed['strip_end'])}")
+    return DYNAMIC_RULES
+
+def format_rules_text(rules=None):
+    rules = rules or DYNAMIC_RULES
+    lines = []
+    for key in ("blocked", "red", "yellow", "blue", "strip_end"):
+        lines.append(RULES_SECTION_TITLES[key])
+        for w in rules.get(key, []):
+            lines.append(w)
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+def save_rules_file():
+    with open(RULES_FILE, "w", encoding="utf-8") as f:
+        f.write(format_rules_text())
+
+def commit_rules():
+    """rules.txt رو مثل posted.json توی گیت‌هاب ذخیره می‌کنه."""
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    import subprocess
+    def git(*args):
+        return subprocess.run(["git", *args], capture_output=True, text=True)
+    try:
+        git("config", "user.name", "news-bot")
+        git("config", "user.email", "bot@users.noreply.github.com")
+        git("pull", "--rebase", "--autostash")
+        git("add", RULES_FILE)
+        if git("diff", "--cached", "--quiet").returncode != 0:
+            git("commit", "-m", "update rules")
+            r = git("push")
+            if r.returncode != 0:
+                print("rules git push failed:", r.stderr[:200])
+    except Exception as ex:
+        print("commit rules error:", repr(ex))
+
+def rules_safety_check(total_candidates, blocked_rejected):
+    """اگه کلمه‌های ممنوع پویا بیش از نصف نامزدها (و حداقل ۵ تا) رو رد کنن، هشدار بده و لیست قبلی برگرده."""
+    if total_candidates >= 5 and blocked_rejected and blocked_rejected / max(total_candidates, 1) > 0.5:
+        try:
+            alert("rules_blocked", f"⚠️ قانون‌های ممنوع جدید بیش از نصف خبرها ({blocked_rejected} از {total_candidates}) رو رد کرد؛ لیست قبلی برگردونده شد. rules.txt رو چک کن.", 1)
+        except Exception:
+            pass
+        global DYNAMIC_RULES
+        if DYNAMIC_RULES_PREV:
+            DYNAMIC_RULES = dict(DYNAMIC_RULES_PREV)
+        RULES_BLOCKED_SUSPENDED[0] = True
+        print("rules safety: dynamic blocked suspended, previous list restored")
+        return True
+    return False
+
+# شمارنده‌ی ردشدن با کلمه‌ی ممنوع در همین دور (برای ایمنی قوانین)
+RULES_REJECT_STATS = {"total": 0, "blocked": 0}
+
+
+
 # ====== ارسال ======
 PARSE_MODE = ["HTML"]
 UPLOAD_FAILS = [0]   # اگه آپلود دو بار تایم‌اوت شد، بقیه‌ی اجرا بدون آپلود ادامه پیدا می‌کنه
@@ -1064,19 +1241,46 @@ def build_text(item, max_len=4000):
     else:
         lead, marker = decide(item)
     first = f"{lead} <b>{esc(item['title'])}</b>"
-
     tail = [proxy_parts()[0], CHANNEL]
-
     paras = list(item.get("paras") or [])
     mark = (not kind) and len(paras) >= 2   # فقط خبرِ چندپاراگرافی علامت می‌گیره
-
+    # نقل‌قول جمع‌شونده فقط برای خبر معمولی طولانی، نه لیست قیمت و نه کیوسک
+    if not kind:
+        _plain_len = len(item.get("title", "")) + sum(len(x) for x in paras)
+        if _plain_len > 600 or len(paras) >= 3:
+            title_text = (item.get("title") or "").strip()
+            visible_para = ""
+            rest = list(paras)
+            if paras and paras[0].strip() and paras[0].strip() != title_text:
+                visible_para = paras[0]
+                rest = paras[1:]
+            elif paras and paras[0].strip() == title_text:
+                rest = paras[1:]
+            visible = [first]
+            if visible_para:
+                visible.append(f"{marker} {esc(visible_para)}" if mark else esc(visible_para))
+            quoted = [f"{marker} {esc(x)}" if mark else esc(x) for x in rest]
+            def assemble_q(q):
+                parts = list(visible)
+                if q:
+                    parts.append("<blockquote expandable>" + "\n\n".join(q) + "</blockquote>")
+                parts += tail
+                return "\n\n".join(parts)
+            text = assemble_q(quoted)
+            while len(text) > max_len and quoted:
+                quoted.pop()
+                text = assemble_q(quoted)
+            if len(text) > max_len and visible_para:
+                # آخرین راه: پاراگراف اولِ دیده‌شونده حذف می‌شه، تیتر همیشه می‌مونه
+                visible = [first]
+                text = assemble_q(quoted)
+            return text
     def assemble(ps):
         if kind:
             body = ["\n".join(esc(p) for p in ps)] if ps else []
         else:
             body = [f"{marker} {esc(p)}" if mark else esc(p) for p in ps]
         return "\n\n".join([first] + body + tail)
-
     text = assemble(paras)
     while len(text) > max_len and paras:
         paras.pop()
@@ -1149,8 +1353,17 @@ def admin_send(text, html_mode=False):
 def day_stats(state, day_id):
     st = state.get("stats") or {}
     if st.get("day") != day_id:
-        st = {"day": day_id, "posted": 0, "src": {}, "ads": 0, "runs": 0, "errors": 0, "first": None}
+        if st.get("day"):
+            week = state.setdefault("stats_week", [])
+            week.append({"day": st.get("day"), "posted": st.get("posted", 0), "src": dict(st.get("src", {})), "rejected": st.get("rejected", 0), "ads": st.get("ads", 0), "errors": st.get("errors", 0), "runs": st.get("runs", 0)})
+            # فقط ۷ روز آخر نگه داشته می‌شه
+            seen_days = {}
+            for e in week:
+                seen_days[e.get("day")] = e
+            state["stats_week"] = [seen_days[k] for k in sorted(seen_days)[-7:]]
+        st = {"day": day_id, "posted": 0, "src": {}, "ads": 0, "rejected": 0, "runs": 0, "errors": 0, "first": None}
         state["stats"] = st
+    st.setdefault("rejected", 0)
     return st
 
 
@@ -1170,7 +1383,7 @@ def build_report(state, ks, day_id):
     lines = [f"📊 گزارش روز {day_id} — GodNews24", f"✅ پست ارسال‌شده: {st.get('posted', 0)}"]
     if src:
         lines.append("   " + " | ".join(f"{k}: {v}" for k, v in sorted(src.items(), key=lambda x: -x[1])))
-    lines += [f"🛡 تبلیغ ردشده: {st.get('ads', 0)}",
+    lines += [f"🛡 پست‌های ردشده: {st.get('rejected', st.get('ads', 0))}",
               f"📰 کیوسک: صبح بخیر {ok(ks.get('morning'))} | نگاه گذرا {ok(ks.get('summary'))} | شب بخیر {ok(ks.get('night'))}",
               f"🔁 تعداد اجراها: {st.get('runs', 0)} | شروع امروز: {st.get('first') or '—'}",
               f"⚠️ خطاها: {st.get('errors', 0)}"]
@@ -1198,18 +1411,44 @@ def fmt_ago(ts):
 
 def status_text(state):
     st = state.get("stats") or {}
-    return "\n".join([
+    src = st.get("src", {}) or {}
+    src_line = " | ".join(f"{k}: {v}" for k, v in sorted(src.items(), key=lambda x: -x[1])) if src else "—"
+    muted = state.get("muted_sources") or []
+    lines = [
         f"🤖 نسخه‌ی ربات: {BOT_VERSION}",
         f"🕒 ساعت تهران: {tehran_now():%H:%M}",
         "⏸ ارسال متوقفه" if state.get("paused") else "▶️ ارسال فعاله",
         f"آخرین پست: {fmt_ago(state.get('last_post'))}",
         f"آخرین نوبت کانال‌ها: {fmt_ago(state.get('last_tg'))}",
         f"آخرین نوبت بقیه‌ی منابع: {fmt_ago(state.get('last_other'))}",
-        f"امروز: {st.get('posted', 0)} پست | {st.get('ads', 0)} تبلیغ ردشده | {st.get('errors', 0)} خطا",
+        f"امروز: {st.get('posted', 0)} پست | {st.get('rejected', st.get('ads', 0))} پست‌های ردشده | {st.get('errors', 0)} خطا",
+        f"پست امروز از هر منبع: {src_line}",
         f"پروکسی سالم (آخرین چک): {state.get('alive_count', '—')} از {state.get('proxy_checked', '—')} بررسی‌شده "
         f"({state.get('proxy_total', '—')} در فایل)",
         f"حالت حلقه: {'روشن' if LOOP_MINUTES > 0 else 'خاموش'}",
-    ])
+    ]
+    if muted:
+        lines.append(f"🔇 منبع‌های بی‌صدا: {', '.join(muted)}")
+    return "\n".join(lines)
+
+def stats_text(state):
+    st = state.get("stats") or {}
+    week = state.get("stats_week") or []
+    total_posted = st.get("posted", 0) + sum(e.get("posted", 0) for e in week)
+    total_rej = st.get("rejected", 0) + sum(e.get("rejected", 0) for e in week)
+    total_err = st.get("errors", 0) + sum(e.get("errors", 0) for e in week)
+    total_runs = st.get("runs", 0) + sum(e.get("runs", 0) for e in week)
+    src_tot = {}
+    for e in list(week) + [st]:
+        for k, v in (e.get("src") or {}).items():
+            src_tot[k] = src_tot.get(k, 0) + v
+    lines = ["📈 آمار ۷ روز اخیر (شامل امروز):", f"پست: {total_posted} | پست‌های ردشده: {total_rej} | خطا: {total_err} | اجراها: {total_runs}"]
+    if src_tot:
+        lines.append("از هر منبع: " + " | ".join(f"{k}: {v}" for k, v in sorted(src_tot.items(), key=lambda x: -x[1])))
+    for e in sorted(week, key=lambda x: x.get("day", "")):
+        lines.append(f"{e.get('day')}: {e.get('posted', 0)} پست، {e.get('rejected', 0)} ردشده")
+    lines.append(f"امروز ({st.get('day', '')}): {st.get('posted', 0)} پست، {st.get('rejected', st.get('ads', 0))} ردشده")
+    return "\n".join(lines)
 
 
 def test_text():
@@ -1257,17 +1496,157 @@ def rejected_text(state, mode):
     return chunks
 
 
-HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای\n/pause ← توقف ارسال به کانال\n/resume ← ادامه‌ی ارسال\n"
+HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست امروز از هر منبع\n/pause ← توقف ارسال به کانال\n/resume ← ادامه‌ی ارسال\n"
              "/skipped ← همه‌ی پست‌های ردشده‌ی امروز (تبلیغ، کلمه‌ی ممنوع، سیاسی، شوخی و...)\n"
              "/errors ← پست‌هایی که امروز ارسالشون خطا داد\n"
-             "/test ← بررسی دسترسی ربات به کانال و نمونه‌ی قالب پست")
+             "/test ← بررسی دسترسی ربات به کانال و نمونه‌ی قالب پست\n"
+             "/send متن ← ارسال متن دلخواه به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
+             "/mute منبع ← بی‌صدا کردن موقت یک منبع\n/unmute منبع ← برگردوندن منبع\n/muted ← لیست منبع‌های بی‌صدا\n"
+             "/stats ← آمار ۷ روز اخیر\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی")
 
 
-def handle_command(state, cmd):
+# ====== دستورهای جدید: /send /delete /mute /stats /rules ======
+SOURCE_ALIASES = {
+    "alonews": "AloNews", "arz_talaaa": "arz_talaaa", "arztalaaa": "arz_talaaa",
+    "euronews": "euronews", "dw": "dw", "france24": "france24", "alarabiya": "alarabiya",
+    "independent": "independent", "independentpersian": "independent",
+    "isna": "isna", "varzesh3": "varzesh3", "digiato": "digiato",
+}
+
+def normalize_source(raw):
+    return (raw or "").strip().lstrip("@").lower()
+
+def source_muted_key(state, url):
+    muted = [m.lower() for m in (state.get("muted_sources") or [])]
+    if not muted:
+        return False
+    if url.startswith("tg:"):
+        return url[3:].lower() in muted
+    low = url.lower()
+    for m in muted:
+        if m in low:
+            return True
+    return False
+
+def _send_admin_text(text):
+    return admin_send(text)
+
+def handle_command(state, cmd, full_text=""):
+    full_text = full_text or cmd
+    parts = full_text.strip().split(None, 1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
     if cmd in ("/start", "/help"):
         admin_send(HELP_TEXT)
     elif cmd == "/status":
         admin_send(status_text(state))
+    elif cmd == "/stats":
+        admin_send(stats_text(state))
+    elif cmd == "/rules":
+        r = DYNAMIC_RULES
+        lines = ["📜 قوانین فعلی (rules.txt):"]
+        for key, label in (("blocked", "ممنوع"), ("red", "🔴"), ("yellow", "🟡"), ("blue", "🔵"), ("strip_end", "پاک شود از آخر متن")):
+            words = r.get(key, [])
+            lines.append(f"{label} ({len(words)}): " + ("، ".join(words) if words else "—"))
+        admin_send("\n".join(lines))
+    elif cmd == "/block":
+        w = arg.strip()
+        if len(w.replace(" ", "").replace("\u200c", "")) < 3:
+            admin_send("کلمه باید حداقل ۳ حرف باشد. مثال: /block کلمه")
+        elif w in DYNAMIC_RULES.get("blocked", []):
+            admin_send(f"«{w}» همین حالا هم ممنوع است.")
+        else:
+            DYNAMIC_RULES.setdefault("blocked", []).append(w)
+            try:
+                save_rules_file(); commit_rules()
+            except Exception as ex:
+                print("save rules error:", ex)
+            admin_send(f"✅ «{w}» به ممنوع اضافه شد.")
+    elif cmd == "/add":
+        toks = arg.split(None, 1)
+        if len(toks) < 2 or toks[0] not in ("🔴", "🟡", "🔵"):
+            admin_send("مثال: /add 🔴 کلمه  یا  /add 🟡 کلمه")
+        else:
+            emoji, w = toks[0], toks[1].strip()
+            key = {"🔴": "red", "🟡": "yellow", "🔵": "blue"}[emoji]
+            if len(w.replace(" ", "").replace("\u200c", "")) < 3:
+                admin_send("کلمه باید حداقل ۳ حرف باشد.")
+            elif w in DYNAMIC_RULES.get(key, []):
+                admin_send(f"«{w}» همین حالا هم در {emoji} است.")
+            else:
+                DYNAMIC_RULES.setdefault(key, []).append(w)
+                try:
+                    save_rules_file(); commit_rules()
+                except Exception as ex:
+                    print("save rules error:", ex)
+                admin_send(f"✅ «{w}» به {emoji} اضافه شد.")
+    elif cmd == "/send":
+        if not arg:
+            admin_send("متن را هم بفرست. مثال: /send سلام به کانال")
+            return
+        LAST_TG_IDS.clear()
+        old_mode = PARSE_MODE[0]
+        PARSE_MODE[0] = None
+        try:
+            ok = tg("sendMessage", text=arg, disable_web_page_preview="true")
+        finally:
+            PARSE_MODE[0] = old_mode
+        if ok:
+            ids = list(LAST_TG_IDS)
+            if ids:
+                state["last_post_ids"] = ids[-10:]
+                state["last_post"] = time.time()
+                try:
+                    save_state(state)
+                except Exception:
+                    pass
+            admin_send(f"✅ فرستاده شد. message_id: {ids[-1] if ids else '—'}")
+        else:
+            admin_send(f"❌ ارسال نشد. {LAST_TG_ERROR[0]}")
+    elif cmd == "/delete":
+        ids = list(state.get("last_post_ids") or [])
+        if not ids:
+            admin_send("پستی برای پاک کردن ندارم.")
+            return
+        done, failed = [], []
+        for mid in ids:
+            try:
+                r = requests.post(f"https://api.telegram.org/bot{TOKEN}/deleteMessage", data={"chat_id": CHANNEL, "message_id": mid}, timeout=20)
+                (done if r.ok else failed).append(mid)
+            except Exception:
+                failed.append(mid)
+        if failed:
+            state["last_post_ids"] = failed
+            admin_send(f"✅ پاک شد: {done}\n❌ پاک نشد: {failed}")
+        else:
+            state["last_post_ids"] = []
+            admin_send(f"✅ آخرین پست پاک شد: {done}")
+        try:
+            save_state(state)
+        except Exception:
+            pass
+    elif cmd == "/mute":
+        key = normalize_source(arg)
+        canon = SOURCE_ALIASES.get(key, key)
+        if not key:
+            admin_send("منبع را هم بگو. مثال: /mute AloNews")
+        elif canon in [normalize_source(x) for x in (state.get("muted_sources") or [])]:
+            admin_send(f"«{canon}» همین حالا هم بی‌صداست.")
+        else:
+            state.setdefault("muted_sources", []).append(canon)
+            admin_send(f"🔇 «{canon}» تا /unmute بی‌صدا شد.")
+    elif cmd == "/unmute":
+        key = normalize_source(arg)
+        canon = SOURCE_ALIASES.get(key, key)
+        muted = state.get("muted_sources") or []
+        new_muted = [x for x in muted if normalize_source(x) != canon]
+        if len(new_muted) == len(muted):
+            admin_send(f"«{canon}» بی‌صدا نبود.")
+        else:
+            state["muted_sources"] = new_muted
+            admin_send(f"🔊 «{canon}» برگشت.")
+    elif cmd == "/muted":
+        muted = state.get("muted_sources") or []
+        admin_send("🔇 منبع‌های بی‌صدا: " + ("، ".join(muted) if muted else "هیچ‌کدام"))
     elif cmd in ("/ads", "/errors", "/skipped"):
         for chunk in rejected_text(state, cmd[1:]):
             admin_send(chunk)
@@ -1311,7 +1690,7 @@ def process_commands(state):
             continue
         text = (msg.get("text") or "").strip()
         if text.startswith("/"):
-            handle_command(state, text.split()[0].split("@")[0].lower())
+            handle_command(state, text.split()[0].split("@")[0].lower(), text)
     return changed
 
 
@@ -1350,6 +1729,11 @@ def log_rejected(src, why, text, post_id=None, extra=""):
                 "text": re.sub(r"\s+", " ", text or "").strip()[:140],
                 "link": f"https://t.me/{post_id}" if post_id else "", "extra": (extra or "")[:120]})
     del log[:-80]
+    _st = st.get("stats") if isinstance(st, dict) else None
+    if _st is not None:
+        _st["rejected"] = _st.get("rejected", 0) + 1
+        if (why or "").startswith("تبلیغ"):
+            _st["ads"] = _st.get("ads", 0) + 1
 
 
 def clear_error(src, post_id):
@@ -1390,7 +1774,19 @@ def tg(method, files=None, **data):
         if r.status_code in (401, 403) or any(h in low for h in AUTH_HINTS):
             alert("tg_auth", f"🚫 تلگرام خطا داد ({method} {r.status_code}): {r.text[:160]}\n"
                              "احتمالاً ربات ادمین کانال نیست، حذف شده یا توکن عوض شده.", 1)
-    return r.ok
+        return False
+    try:
+        res = r.json().get("result")
+        ids = []
+        if isinstance(res, dict) and res.get("message_id"):
+            ids = [res["message_id"]]
+        elif isinstance(res, list):
+            ids = [m.get("message_id") for m in res if isinstance(m, dict) and m.get("message_id")]
+        if ids:
+            LAST_TG_IDS.extend(ids)
+    except Exception:
+        pass
+    return True
 
 
 def download(url, limit=30 * 1024 * 1024, max_seconds=60):
@@ -1476,15 +1872,34 @@ def send_group(media, caption, upload_first=False):
     return False
 
 
+def _record_sent_ids():
+    st = STATE_REF[0]
+    if st is not None and LAST_TG_IDS:
+        st["last_post_ids"] = list(LAST_TG_IDS[-10:])
+
 def send(item):
+    LAST_TG_IDS.clear()
     media = media_list(item)
-    caption = build_text(item, max_len=1000)
+    full_text = build_text(item)  # حداکثر ۴۰۰۰، بدون بریدن آخر متن
     up = str(item.get("id", "")).startswith("tg:")   # تلگرام لینک عکس کانال‌ها رو نمی‌تونه بگیره؛ مستقیم آپلود
-    if len(media) >= 2 and send_group(media, caption, up):
-        return True
-    if media and send_single(media[0][0], media[0][1], caption, up):
-        return True
-    return tg("sendMessage", text=build_text(item), disable_web_page_preview="true")
+    ok = False
+    if media and len(full_text) > 1000:
+        # متن طولانی با عکس: اول عکس بدون کپشن، بعد متن کامل جداگانه (نه بریده با …)
+        if len(media) >= 2 and send_group(media, "", up):
+            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+        elif media and send_single(media[0][0], media[0][1], "", up):
+            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+        else:
+            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+    elif len(media) >= 2 and send_group(media, build_text(item, max_len=1000), up):
+        ok = True
+    elif media and send_single(media[0][0], media[0][1], build_text(item, max_len=1000), up):
+        ok = True
+    else:
+        ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+    if ok:
+        _record_sent_ids()
+    return ok
 
 
 def plain_of(h):
@@ -1507,13 +1922,18 @@ def deliver(text, media):
 def send_special(text, media, proxy):
     """متن (HTML) رو می‌فرسته. ته پیام: [پروکسی] و بعد آیدی کانال خودمون."""
     text = text.strip()
+    LAST_TG_IDS.clear()
     p_html, p_plain = proxy_parts()
     if deliver("\n\n".join(x for x in (text, p_html if proxy else "", CHANNEL) if x), media):
+        _record_sent_ids()
         return True
     PARSE_MODE[0] = None   # اگه تلگرام فرمت HTML رو نپذیرفت، به‌صورت متن ساده
     try:
         parts = (plain_of(text), p_plain if proxy else "", CHANNEL)
-        return deliver("\n\n".join(x for x in parts if x), media)
+        _ok = deliver("\n\n".join(x for x in parts if x), media)
+        if _ok:
+            _record_sent_ids()
+        return _ok
     finally:
         PARSE_MODE[0] = "HTML"
 
@@ -1619,6 +2039,65 @@ def choose(cands, limit, seen, recent_sets, kept_sets):
     return final
 
 
+def fetch_remote_state():
+    """posted.json تازه رو از گیت‌هاب می‌خونه تا دور جدید با حافظه‌ی دور قبلی شروع بشه."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not repo:
+        return None
+    ref = os.environ.get("GITHUB_REF_NAME", "main")
+    try:
+        headers = {"Cache-Control": "no-cache"}
+        tok = os.environ.get("GITHUB_TOKEN")
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+        r = requests.get(f"https://raw.githubusercontent.com/{repo}/{ref}/{STATE_FILE}", headers=headers, timeout=15)
+        if r.ok and r.text.strip():
+            data = json.loads(r.text)
+            if isinstance(data, dict):
+                return data
+    except Exception as ex:
+        print("remote state error:", ex)
+    return None
+
+def merge_remote_state(state, remote):
+    if not remote:
+        return False
+    local_seen = list(state.get("seen") or [])
+    remote_seen = list(remote.get("seen") or [])
+    local_last = state.get("last_tg") or 0
+    remote_last = remote.get("last_tg") or 0
+    if not local_seen and not remote_seen:
+        return False
+    if not (len(remote_seen) > len(local_seen) or remote_last > local_last or not local_seen):
+        return False
+    merged_seen, seen_set = [], set()
+    for x in local_seen + remote_seen:
+        if x not in seen_set:
+            seen_set.add(x)
+            merged_seen.append(x)
+    state["seen"] = merged_seen[-5000:]
+    merged_seeded = list(dict.fromkeys(list(state.get("seeded") or []) + list(remote.get("seeded") or [])))
+    state["seeded"] = merged_seeded
+    titles = list(state.get("titles") or []) + list(remote.get("titles") or [])
+    titles.sort(key=lambda t: t.get("t", 0) if isinstance(t, dict) else 0)
+    state["titles"] = titles[-400:]
+    for k in ("last_tg", "last_other", "last_post"):
+        state[k] = max(state.get(k) or 0, remote.get(k) or 0)
+    state["muted_sources"] = list(dict.fromkeys(list(state.get("muted_sources") or []) + list(remote.get("muted_sources") or [])))
+    if remote.get("last_post_ids"):
+        state["last_post_ids"] = list(dict.fromkeys(list(state.get("last_post_ids") or []) + list(remote.get("last_post_ids") or [])))[-10:]
+    week = {}
+    for e in list(state.get("stats_week") or []) + list(remote.get("stats_week") or []):
+        if isinstance(e, dict) and e.get("day"):
+            week[e["day"]] = e
+    if week:
+        state["stats_week"] = [week[k] for k in sorted(week)[-7:]]
+    rk, lk = remote.get("kiosk") or {}, state.get("kiosk") or {}
+    if rk.get("day", "") > lk.get("day", ""):
+        state["kiosk"] = rk
+    print(f"remote state merged: seen {len(local_seen)} -> {len(state['seen'])}")
+    return True
+
 def is_quiet_hours():
     t = tehran_now()
     m = t.hour * 60 + t.minute
@@ -1633,6 +2112,18 @@ def run_once():
     RATE_LIMITS[0] = 0
     state = load_state()
     STATE_REF[0] = state
+    try:
+        load_rules()
+    except Exception as ex:
+        print("load rules error:", ex)
+    RULES_REJECT_STATS["total"] = 0
+    RULES_REJECT_STATS["blocked"] = 0
+    try:
+        _remote = fetch_remote_state()
+        if _remote:
+            merge_remote_state(state, _remote)
+    except Exception as ex:
+        print("merge remote state error:", ex)
     if process_commands(state):   # فرمان‌های ادمین (/pause ، /status و ...)
         save_state(state)
     now = time.time()
@@ -1733,15 +2224,23 @@ def run_once():
     if any(k == "morning" for k, _ in pre):
         state["rejected"] = []   # با «صبح بخیر» کیوسک (اولین پیام روز) لیست ردشده‌های دیروز پاک می‌شه
 
-    # ---- بقیه‌ی منابع
-    tg_feeds = [f for f in FEEDS if f[1].startswith("tg:")]
-    other_feeds = [f for f in FEEDS if not f[1].startswith("tg:")]
+    # ---- بقیه‌ی منابع (منبع‌های بی‌صدا حذف می‌شن)
+    tg_feeds = [f for f in FEEDS if f[1].startswith("tg:") and not source_muted_key(state, f[1])]
+    other_feeds = [f for f in FEEDS if not f[1].startswith("tg:") and not source_muted_key(state, f[1])]
+    if len(tg_feeds) + len(other_feeds) < len(FEEDS):
+        print("muted sources skipped:", state.get("muted_sources"))
 
     if run_tg:
         cands = collect(tg_feeds, seen, seeded, seed_n=TG_MAX_POSTS)
         n = random.randint(TG_MIN_POSTS, TG_MAX_POSTS)
         chosen = choose(cands, n, seen, recent_sets, kept_sets)
         print(f"کانال‌های تلگرامی: {len(cands)} خبر تازه، {len(chosen)} تا انتخاب شد (سقف {n})")
+        _examined = sum(READ_STATUS.values()) + len(cands)
+        _blocked_n = sum(1 for e in (state.get("rejected") or []) if e.get("day") == rejected_day() and e.get("why") == "کلمه‌ی ممنوع")
+        # ایمنی قوانین: اگه بیش از نصف بررسی‌شده‌ها با کلمه‌ی ممنوع رد شده باشن، لیست قبلی برگرده
+        if _examined >= 5:
+            _today_blocked = len([e for e in (state.get("rejected") or []) if e.get("day") == rejected_day() and e.get("why") == "کلمه‌ی ممنوع"])
+            rules_safety_check(_examined, _today_blocked)
         to_post += chosen
         state["last_tg"] = now
         streak = state.setdefault("empty_streak", {})
@@ -1754,7 +2253,7 @@ def run_once():
                                         "(پیش‌نمایش عمومی بسته شده یا دسترسی بلاکه).", 6)
         ad_streak = state.setdefault("ad_streak", {})
         for nm, (ads_n, total_n) in AD_STATS.items():
-            stats["ads"] = stats.get("ads", 0) + ads_n
+            # آمار ردشده فقط از log_rejected() می‌آد؛ اینجا فقط برای هشدار استفاده می‌شه
             high = total_n >= 8 and ads_n / total_n >= 0.5
             ad_streak[nm] = ad_streak.get(nm, 0) + 1 if high else 0
             if ad_streak[nm] >= 2:
@@ -1788,6 +2287,7 @@ def run_once():
             if run_special(kind, p, seen, ks):
                 state["last_post"] = time.time()
                 count_post(state, "kiosk")
+                save_state(state)
             else:
                 log_rejected("kiosk", f"خطا در ارسال ({kind})", p.get("text", ""), p.get("post_id"), LAST_TG_ERROR[0])
             time.sleep(3)
@@ -1802,6 +2302,9 @@ def run_once():
                 count_post(state, item.get("src", "?"))
                 seen[item["id"]] = None
                 recent.append({"t": time.time(), "k": sorted(item["tok"])})
+                state["seen"] = list(seen)
+                state["titles"] = recent[-400:]
+                save_state(state)
                 print("posted:", item["title"][:60])
                 if str(item["id"]).startswith("tg:"):
                     clear_error(item.get("src", "?"), item["id"][3:])
@@ -1815,6 +2318,7 @@ def run_once():
             if run_special(kind, p, seen, ks):
                 state["last_post"] = time.time()
                 count_post(state, "kiosk")
+                save_state(state)
             else:
                 log_rejected("kiosk", f"خطا در ارسال ({kind})", p.get("text", ""), p.get("post_id"), LAST_TG_ERROR[0])
     except Exception as ex:   # هر خطایی بیاد، حافظه ذخیره می‌شه تا خبر تکراری نره
@@ -1881,7 +2385,12 @@ def commit_state():
     try:
         git("config", "user.name", "news-bot")
         git("config", "user.email", "bot@users.noreply.github.com")
+        _pull = git("pull", "--rebase", "--autostash")
+        if _pull.returncode != 0:
+            print("git pull --rebase failed (ignored):", (_pull.stderr or "")[:200])
         git("add", STATE_FILE)
+        if os.path.exists(RULES_FILE):
+            git("add", RULES_FILE)
         if git("diff", "--cached", "--quiet").returncode != 0:
             git("commit", "-m", "update posted")
             r = git("push")
