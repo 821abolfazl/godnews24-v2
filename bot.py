@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-12-b"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-12-d"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1245,21 +1245,16 @@ def build_text(item, max_len=4000):
     paras = list(item.get("paras") or [])
     mark = (not kind) and len(paras) >= 2   # فقط خبرِ چندپاراگرافی علامت می‌گیره
     # نقل‌قول جمع‌شونده فقط برای خبر معمولی طولانی، نه لیست قیمت و نه کیوسک
+    # (نسخه‌ی d: فقط تیتر دیده می‌شه؛ پاراگراف اول هم مثل بقیه داخل نقل‌قول می‌ره)
     if not kind:
         _plain_len = len(item.get("title", "")) + sum(len(x) for x in paras)
         if _plain_len > 600 or len(paras) >= 3:
             title_text = (item.get("title") or "").strip()
-            visible_para = ""
-            rest = list(paras)
-            if paras and paras[0].strip() and paras[0].strip() != title_text:
-                visible_para = paras[0]
-                rest = paras[1:]
-            elif paras and paras[0].strip() == title_text:
-                rest = paras[1:]
-            visible = [first]
-            if visible_para:
-                visible.append(f"{marker} {esc(visible_para)}" if mark else esc(visible_para))
-            quoted = [f"{marker} {esc(x)}" if mark else esc(x) for x in rest]
+            quoted_paras = list(paras)
+            if quoted_paras and quoted_paras[0].strip() == title_text:
+                quoted_paras = quoted_paras[1:]   # پاراگراف اول اگه عین تیتر بود، تکراریه؛ داخل نقل‌قول نمی‌ره
+            visible = [first]   # فقط تیتر دیده می‌شه؛ پاراگراف اول هم داخل نقل‌قول می‌ره
+            quoted = [f"{marker} {esc(x)}" if mark else esc(x) for x in quoted_paras]
             def assemble_q(q):
                 parts = list(visible)
                 if q:
@@ -1268,11 +1263,7 @@ def build_text(item, max_len=4000):
                 return "\n\n".join(parts)
             text = assemble_q(quoted)
             while len(text) > max_len and quoted:
-                quoted.pop()
-                text = assemble_q(quoted)
-            if len(text) > max_len and visible_para:
-                # آخرین راه: پاراگراف اولِ دیده‌شونده حذف می‌شه، تیتر همیشه می‌مونه
-                visible = [first]
+                quoted.pop()   # اول از آخرِ نقل‌قول کم می‌شه؛ تیتر همیشه می‌مونه
                 text = assemble_q(quoted)
             return text
     def assemble(ps):
@@ -1361,6 +1352,11 @@ def day_stats(state, day_id):
             for e in week:
                 seen_days[e.get("day")] = e
             state["stats_week"] = [seen_days[k] for k in sorted(seen_days)[-7:]]
+            # با عوض شدن «روز» کانال، خبرهای مهم امروز می‌شن خبرهای دیروز (برای صبحانه خبری)
+            if state.get("today_top"):
+                state["prev_top"] = list(state.get("today_top") or [])[-50:]
+            state["today_top"] = []
+            state["today_top_day"] = day_id
         st = {"day": day_id, "posted": 0, "src": {}, "ads": 0, "rejected": 0, "runs": 0, "errors": 0, "first": None}
         state["stats"] = st
     st.setdefault("rejected", 0)
@@ -1427,6 +1423,15 @@ def status_text(state):
         f"({state.get('proxy_total', '—')} در فایل)",
         f"حالت حلقه: {'روشن' if LOOP_MINUTES > 0 else 'خاموش'}",
     ]
+    _b = state.get("price_board") or {}
+    if _b.get("msg_id"):
+        lines.append(f"📌 تابلو قیمت: پیام {_b['msg_id']} | آخرین به‌روزرسانی {fmt_ago(_b.get('updated'))}")
+    _dg = state.get("digests") or {}
+    _dg_day = (tehran_now() - timedelta(hours=8)).strftime("%Y-%m-%d")
+    if _dg.get("day") == _dg_day:
+        lines.append(f"🍳 صبحانه: {'✅' if _dg.get('morning') else '—'} | 🍽️ شام: {'✅' if _dg.get('dinner') else '—'}")
+    else:
+        lines.append("🍳 صبحانه: — | 🍽️ شام: —")
     if muted:
         lines.append(f"🔇 منبع‌های بی‌صدا: {', '.join(muted)}")
     return "\n".join(lines)
@@ -1502,7 +1507,8 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/test ← بررسی دسترسی ربات به کانال و نمونه‌ی قالب پست\n"
              "/send متن ← ارسال متن دلخواه به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع ← بی‌صدا کردن موقت یک منبع\n/unmute منبع ← برگردوندن منبع\n/muted ← لیست منبع‌های بی‌صدا\n"
-             "/stats ← آمار ۷ روز اخیر\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی")
+             "/stats ← آمار ۷ روز اخیر\n/board ← تازه کردن تابلو قیمت پین‌شده\n"
+             "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی")
 
 
 # ====== دستورهای جدید: /send /delete /mute /stats /rules ======
@@ -1541,6 +1547,17 @@ def handle_command(state, cmd, full_text=""):
         admin_send(status_text(state))
     elif cmd == "/stats":
         admin_send(stats_text(state))
+    elif cmd == "/board":
+        b = state.get("price_board") or {}
+        if not b.get("msg_id") or not b.get("prices"):
+            admin_send("📌 هنوز تابلو قیمت ساخته نشده؛ با اولین لیست قیمت تازه ساخته می‌شه.")
+        elif tg("editMessageText", message_id=b["msg_id"],
+                text=build_price_board_text(b["prices"], tehran_now().strftime("%H:%M")),
+                disable_web_page_preview="true"):
+            b["updated"] = time.time()
+            admin_send("✅ تابلو قیمت تازه شد.")
+        else:
+            admin_send("❌ ویرایش تابلو نشد؛ شاید پیام پاک شده. با لیست قیمت بعدی یکی تازه ساخته می‌شه.")
     elif cmd == "/rules":
         r = DYNAMIC_RULES
         lines = ["📜 قوانین فعلی (rules.txt):"]
@@ -1809,13 +1826,16 @@ def download(url, limit=30 * 1024 * 1024, max_seconds=60):
 
 
 def media_list(item):
+    """همه‌ی رسانه‌های یک خبر رو با هم برمی‌گردونه (عکس و فیلم با هم، حداکثر ۱۰ تا)
+    تا در یک پست (یک sendMediaGroup) برن، نه جدا از هم."""
     if item.get("media"):
         return item["media"][:10]
+    out = []
     if item.get("video"):
-        return [("video", item["video"])]
+        out.append(("video", item["video"]))
     if item.get("image"):
-        return [("photo", item["image"])]
-    return []
+        out.append(("photo", item["image"]))
+    return out
 
 
 def send_single(kind, url, caption, upload_first=False):
@@ -1878,22 +1898,35 @@ def _record_sent_ids():
         st["last_post_ids"] = list(LAST_TG_IDS[-10:])
 
 def send(item):
+    """همه‌ی عکس‌ها و فیلم‌های یک خبر با هم در یک پست می‌رن (یک sendMediaGroup).
+    اگه گروه رسانه کاملاً شکست خورد، به‌جای یک عکسِ تنها که بقیه‌ی رسانه‌ها رو
+    دور می‌ریزه، فقط متن فرستاده می‌شه. تک‌رسانه‌ای بودن با send_single مشکلی نداره."""
     LAST_TG_IDS.clear()
     media = media_list(item)
     full_text = build_text(item)  # حداکثر ۴۰۰۰، بدون بریدن آخر متن
     up = str(item.get("id", "")).startswith("tg:")   # تلگرام لینک عکس کانال‌ها رو نمی‌تونه بگیره؛ مستقیم آپلود
     ok = False
-    if media and len(full_text) > 1000:
+    if not media:
+        ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+    elif len(full_text) > 1000:
         # متن طولانی با عکس: اول عکس بدون کپشن، بعد متن کامل جداگانه (نه بریده با …)
-        if len(media) >= 2 and send_group(media, "", up):
-            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
-        elif media and send_single(media[0][0], media[0][1], "", up):
+        if len(media) >= 2:
+            if send_group(media, "", up):
+                ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+            else:
+                print("  media group failed; sending text only (no single-media fallback that drops media)")
+                ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+        elif send_single(media[0][0], media[0][1], "", up):
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
         else:
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
-    elif len(media) >= 2 and send_group(media, build_text(item, max_len=1000), up):
-        ok = True
-    elif media and send_single(media[0][0], media[0][1], build_text(item, max_len=1000), up):
+    elif len(media) >= 2:
+        if send_group(media, build_text(item, max_len=1000), up):
+            ok = True
+        else:
+            print("  media group failed; sending text only (no single-media fallback that drops media)")
+            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+    elif send_single(media[0][0], media[0][1], build_text(item, max_len=1000), up):
         ok = True
     else:
         ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
@@ -1907,11 +1940,22 @@ def plain_of(h):
 
 
 def deliver(text, media):
+    """همه‌ی رسانه‌ها با هم در یک گروه می‌رن؛ اگه گروه کاملاً شکست خورد، فقط متن
+    فرستاده می‌شه (نه یک عکس تنها که بقیه‌ی رسانه‌ها رو دور بریزه)."""
     if media and len(text) > 1000:   # کپشن تلگرام حداکثر ۱۰۲۴ کاراکتره: اول عکس، بعد متن
-        ok = send_group(media, "", True) if len(media) >= 2 else send_single(media[0][0], media[0][1], "", True)
-        return ok and tg("sendMessage", text=text, disable_web_page_preview="true")
-    if len(media) >= 2 and send_group(media, text, True):
-        return True
+        if len(media) >= 2:
+            if send_group(media, "", True):
+                return tg("sendMessage", text=text, disable_web_page_preview="true")
+            print("  media group failed; sending text only (no single-media fallback that drops media)")
+            return tg("sendMessage", text=text, disable_web_page_preview="true")
+        if send_single(media[0][0], media[0][1], "", True):
+            return tg("sendMessage", text=text, disable_web_page_preview="true")
+        return tg("sendMessage", text=text, disable_web_page_preview="true")
+    if len(media) >= 2:
+        if send_group(media, text, True):
+            return True
+        print("  media group failed; sending text only (no single-media fallback that drops media)")
+        return tg("sendMessage", text=text, disable_web_page_preview="true") if text else False
     if media and send_single(media[0][0], media[0][1], text, True):
         return True
     if text:
@@ -1936,6 +1980,221 @@ def send_special(text, media, proxy):
         return _ok
     finally:
         PARSE_MODE[0] = "HTML"
+
+
+# ====== تابلو قیمت پین‌شده (نسخه‌ی c) ======
+# یک پیام پین‌شده بالای کانال که قیمت‌های لیست تازه‌ی ارز و طلا رو نشون می‌ده
+# و با هر لیست قیمت تازه، به‌جای پست جدید، ویرایش می‌شه. خرابیِ تابلو هیچ‌وقت
+# ارسال خبرها رو خراب نمی‌کنه: همه‌ی فراخوانی‌ها داخل try/except هستن.
+_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+_PRICE_BOARD_ROWS = [
+    # (کلید، برچسب نمایشی، کلمه‌های خط قیمت، کلمه‌هایی که خط رو رد می‌کنن)
+    ("dollar", "💵 دلار", ("دلار",), ("کانادا", "استرالیا")),
+    ("euro", "💶 یورو", ("یورو",), ()),
+    ("gold18", "🟡 طلای ۱۸ عیار", ("طلای ۱۸ عیار", "طلای 18 عیار", "طلا ۱۸ عیار", "طلا 18 عیار"), ()),
+    ("coin", "🪙 سکه تمام", ("سکه تمام", "سکه امامی", "سکه بهار"), ()),
+    ("tether", "💲 تتر", ("تتر",), ()),
+    ("bitcoin", "₿ بیت‌کوین", ("بیت‌کوین", "بیت کوین", "بیتکوین"), ()),
+]
+_PRICE_BOARD_MIN_ROWS = 2      # با کمتر از این تعداد قیمت، تابلو ساخته نمی‌شه
+_PRICE_BOARD_REFRESH_MIN = 60  # اگه قیمت عوض نشده ولی این‌قدر گذشته، ساعت تابلو تازه می‌شه
+
+
+def _fa_num(n):
+    """عدد رو با رقم‌های فارسی و جداکننده‌ی هزارگان برمی‌گردونه: 109200 -> ۱۰۹٬۲۰۰"""
+    s = f"{int(n):,}".replace(",", "٬")
+    return s.translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+
+def _price_number(line):
+    """قیمت رو از یک خط لیست قیمت درمی‌آره (ارقام فارسی/عربی/لاتین).
+    آخرین عددِ حداقل ۴ رقمی خط برمی‌گرده؛ مثلاً «طلای ۱۸ عیار: ۱۰٬۵۰۰٬۰۰۰ تومان»
+    عدد ۱۸ رو رد می‌کنه و ۱۰۵۰۰۰۰۰ رو برمی‌گردونه. اگه عددی نبود None."""
+    nums = []
+    for tok in re.findall(r"[0-9۰-۹٠-٩][0-9۰-۹٠-٩,٬،. ]*[0-9۰-۹٠-٩]|[0-9۰-۹٠-٩]", line):
+        digits = tok.translate(_FA_DIGITS).replace(",", "").replace("٬", "").replace("،", "").replace(".", "").replace(" ", "")
+        if digits.isdigit():
+            nums.append(int(digits))
+    big = [n for n in nums if n >= 1000]
+    if big:
+        return big[-1]
+    return nums[-1] if nums else None
+
+
+def extract_board_prices(text):
+    """از متن یک لیست قیمت (تیتر + پاراگراف‌ها) قیمت‌های تابلو رو درمی‌آره.
+    خروجی: dict مثل {"dollar": 109200, ...} — فقط ردیف‌هایی که پیدا شدن."""
+    prices = {}
+    lines = [l.strip() for l in (text or "").split("\n") if l.strip()]
+    for key, _label, keywords, skip_words in _PRICE_BOARD_ROWS:
+        for line in lines:
+            if any(w in line for w in skip_words):
+                continue
+            if any(k in line for k in keywords):
+                v = _price_number(line)
+                if v:
+                    prices[key] = v
+                    break
+    return prices
+
+
+def build_price_board_text(prices, when_hm):
+    """متن تابلو قیمت رو می‌سازه. متن ساده‌ست (بدون تگ HTML) تا parse نشه."""
+    lines = [f"📌 تابلو قیمت — {CHANNEL}"]
+    for key, label, _kw, _skip in _PRICE_BOARD_ROWS:
+        if key in prices:
+            unit = "دلار" if key == "bitcoin" else "تومان"
+            lines.append(f"{label}: {_fa_num(prices[key])} {unit}")
+    lines.append(f"🕒 به‌روز شده: {when_hm}")
+    lines.append("قیمت‌ها از لیست ارز و طلا؛ با هر نوبت ربات تازه می‌شود.")
+    return "\n".join(lines)
+
+
+def update_price_board(state, items, day_id, th):
+    """اگه این نوبت لیست قیمت تازه‌ای (kind=money) پست شده، تابلو رو تازه می‌کنه:
+    همون روز پیام پین‌شده ویرایش می‌شه، روز جدید (یا اگه پیام پاک شده بود) پیام
+    تازه فرستاده و پین می‌شه. False یعنی تابلو عوض نشد؛ خطا هیچ‌وقت بالا نمی‌آد."""
+    try:
+        money = [i for i in (items or []) if i.get("kind") == "money"]
+        if not money:
+            return False
+        latest = max(money, key=lambda x: x.get("ts", 0))
+        text = (latest.get("title", "") + "\n" + "\n".join(latest.get("paras") or [])).strip()
+        prices = extract_board_prices(text)
+        if len(prices) < _PRICE_BOARD_MIN_ROWS:
+            print(f"price board skipped: only {len(prices)} prices in latest money list")
+            return False
+        board = state.get("price_board") or {}
+        now = time.time()
+        when_hm = f"{th:%H:%M}"
+        if board.get("msg_id") and board.get("day") == day_id:
+            if board.get("prices") == prices and now - (board.get("updated") or 0) < _PRICE_BOARD_REFRESH_MIN * 60:
+                return False
+            if tg("editMessageText", message_id=board["msg_id"], text=build_price_board_text(prices, when_hm),
+                  disable_web_page_preview="true"):
+                board.update({"prices": prices, "updated": now})
+                state["price_board"] = board
+                print("price board edited:", board["msg_id"])
+                return True
+            print("price board edit failed; sending a new one")
+        LAST_TG_IDS.clear()
+        if not tg("sendMessage", text=build_price_board_text(prices, when_hm), disable_web_page_preview="true"):
+            return False
+        msg_id = LAST_TG_IDS[-1] if LAST_TG_IDS else None
+        if not msg_id:
+            return False
+        if not tg("pinChatMessage", message_id=msg_id, disable_notification="true"):
+            print("price board pin failed (message sent anyway):", msg_id)
+        state["price_board"] = {"msg_id": msg_id, "day": day_id, "prices": prices, "updated": now}
+        print("price board sent+pinned:", msg_id)
+        return True
+    except Exception as ex:
+        print("price board error:", repr(ex))
+        return False
+
+
+# ====== خلاصه‌ی صبحانه و شام خبری (نسخه‌ی d) ======
+# هر خبر معمولیِ موفق در state["today_top"] ثبت می‌شه (حداکثر ۵۰ تا؛ لیست قیمت
+# و کیوسک ثبت نمی‌شن). با عوض شدن «روز» کانال، today_top به prev_top منتقل می‌شه
+# تا صبحانه خبری بتونه از خبرهای شب قبل هم استفاده کنه.
+def record_top(state, item, day_id):
+    """خبر معمولیِ تازه‌منتشرشده رو برای خلاصه‌های روز ثبت می‌کنه."""
+    try:
+        if item.get("kind"):
+            return   # لیست قیمت ثبت نمی‌شه
+        title = (item.get("title") or "").strip()
+        if not title:
+            return
+        lead, _marker = decide(item)
+        red = (lead == "🔴" or bool(item.get("red_src"))
+               or bool(RED_RE.search(title)) or _dyn_match("red", title))
+        top = state.setdefault("today_top", [])
+        if any((e.get("t") or "") == title for e in top):
+            return
+        top.append({"t": title, "e": lead, "red": red, "ts": time.time(), "src": item.get("src", "?")})
+        state["today_top"] = top[-50:]
+        state["today_top_day"] = day_id
+    except Exception as ex:
+        print("record top error:", repr(ex))
+
+
+def _dedupe_top(entries):
+    """خبرهای تکراری (هم‌تیتر) رو حذف می‌کنه؛ تازه‌ترین نسخه می‌مونه."""
+    by_title = {}
+    for e in entries or []:
+        t = (e.get("t") or "").strip()
+        if not t:
+            continue
+        if t not in by_title or (e.get("ts") or 0) > (by_title[t].get("ts") or 0):
+            by_title[t] = e
+    return list(by_title.values())
+
+
+def rank_top(entries):
+    """مهم‌ترین‌ها اول: اول 🔴ها، بعد تازه‌ترین‌ها."""
+    return sorted((e for e in _dedupe_top(entries) if (e.get("t") or "").strip()),
+                  key=lambda e: (0 if e.get("red") else 1, -(e.get("ts") or 0)))
+
+
+def build_digest_text(title, date_str, entries):
+    """متن خلاصه: تیتر + تاریخ، لیست شماره‌دار (ایموجی + تیتر)، آخرش @GodNews24.
+    حداکثر ۱۰ خبر، حداکثر ۴۰۰۰ کاراکتر؛ خالی باشه رشته‌ی خالی برمی‌گرده."""
+    ranked = rank_top(entries)[:10]
+    if not ranked:
+        return ""
+
+    def assemble(max_title):
+        lines = [f"{title} — {date_str}"]
+        for i, e in enumerate(ranked, 1):
+            t = (e.get("t") or "").strip()
+            if len(t) > max_title:
+                t = t[:max_title].rstrip() + "…"
+            lines.append(f"{i}. {e.get('e') or '🔵'} {t}")
+        lines.append(CHANNEL)
+        return "\n".join(lines)
+
+    text = assemble(200)
+    for max_title in (150, 100, 60):
+        if len(text) <= 4000:
+            break
+        text = assemble(max_title)
+    while len(text) > 4000 and ranked:
+        ranked = ranked[:-1]
+        text = assemble(60)
+    return text if ranked and len(text) <= 4000 else ""
+
+
+def send_digest(state, kind, day_id, th):
+    """یک خلاصه می‌فرسته (kind: "morning" یا "dinner"). خالی باشه بی‌صدا رد می‌شه
+    و «فرستاده‌شده» علامت نمی‌خوره تا نوبت بعد دوباره امتحان بشه. خرابی‌ش
+    هیچ‌وقت ارسال خبرها رو خراب نمی‌کنه."""
+    dg = state.get("digests") or {}
+    if dg.get("day") != day_id:
+        dg = {"day": day_id, "morning": False, "dinner": False}
+        state["digests"] = dg
+    if dg.get(kind):
+        return False
+    if kind == "morning":
+        entries = list(state.get("prev_top") or []) + list(state.get("today_top") or [])
+        title = "🍳 صبحانه خبری گادنیوز"
+    else:
+        entries = list(state.get("today_top") or [])
+        title = "🍽️ شام خبری گادنیوز"
+    text = build_digest_text(title, day_id, entries)
+    if not text:
+        return False
+    try:
+        if tg("sendMessage", text=text, disable_web_page_preview="true"):
+            dg[kind] = True
+            state["digests"] = dg
+            count_post(state, "digest")
+            state["last_post"] = time.time()
+            _record_sent_ids()
+            print("digest posted:", kind)
+            return True
+    except Exception as ex:
+        print("digest error:", kind, repr(ex))
+    return False
 
 
 def strip_leading_emoji_html(h):
@@ -2086,6 +2345,32 @@ def merge_remote_state(state, remote):
     state["muted_sources"] = list(dict.fromkeys(list(state.get("muted_sources") or []) + list(remote.get("muted_sources") or [])))
     if remote.get("last_post_ids"):
         state["last_post_ids"] = list(dict.fromkeys(list(state.get("last_post_ids") or []) + list(remote.get("last_post_ids") or [])))[-10:]
+    rb, lb = remote.get("price_board") or {}, state.get("price_board") or {}
+    if rb.get("msg_id") and (rb.get("updated") or 0) > (lb.get("updated") or 0):
+        state["price_board"] = rb   # تابلو قیمت تازه‌تر از دور قبلی رو نگه دار
+    # خبرهای مهم روز (برای صبحانه/شام خبری): اگه روزشون فرق داشت، تازه‌تر می‌مونه؛
+    # اگه هم‌روز بودن، با هم ادغام می‌شن تا چیزی گم نشه
+    for _key in ("today_top", "prev_top"):
+        _lcl, _rmt = list(state.get(_key) or []), list(remote.get(_key) or [])
+        if not _rmt:
+            continue
+        if _key == "today_top":
+            _ld, _rd = state.get("today_top_day"), remote.get("today_top_day")
+            if _rd and _ld and _rd != _ld:
+                if _rd > _ld:
+                    state[_key] = _rmt[-50:]
+                    state["today_top_day"] = _rd
+                continue
+        _merged = _dedupe_top(_lcl + _rmt)
+        _merged.sort(key=lambda e: e.get("ts") or 0)
+        state[_key] = _merged[-50:]
+    _rdg, _ldg = remote.get("digests") or {}, state.get("digests") or {}
+    if _rdg.get("day", "") > _ldg.get("day", ""):
+        state["digests"] = _rdg   # پرچم‌های خلاصه‌ی روز تازه‌تر
+    elif _rdg.get("day") and _rdg.get("day") == _ldg.get("day"):
+        state["digests"] = {"day": _ldg["day"],
+                            "morning": bool(_ldg.get("morning") or _rdg.get("morning")),
+                            "dinner": bool(_ldg.get("dinner") or _rdg.get("dinner"))}
     week = {}
     for e in list(state.get("stats_week") or []) + list(remote.get("stats_week") or []):
         if isinstance(e, dict) and e.get("day"):
@@ -2136,6 +2421,10 @@ def run_once():
     if ks.get("day") != day_id:
         ks = {"day": day_id, "morning": False, "summary": False, "night": False}
     stats = day_stats(state, day_id)
+    dg = state.get("digests") or {}
+    if dg.get("day") != day_id:
+        dg = {"day": day_id, "morning": False, "dinner": False}
+        state["digests"] = dg
 
     only_night = False
     if not force and is_quiet_hours():
@@ -2300,6 +2589,7 @@ def run_once():
             if send(item):
                 state["last_post"] = time.time()
                 count_post(state, item.get("src", "?"))
+                record_top(state, item, day_id)   # برای صبحانه/شام خبری (لیست قیمت ثبت نمی‌شه)
                 seen[item["id"]] = None
                 recent.append({"t": time.time(), "k": sorted(item["tok"])})
                 state["seen"] = list(seen)
@@ -2312,6 +2602,27 @@ def run_once():
                 log_rejected(item.get("src", "?"), "خطا در ارسال", item["title"],
                              item["id"][3:] if str(item["id"]).startswith("tg:") else None, LAST_TG_ERROR[0])
             time.sleep(3)
+
+        # صبحانه خبری: ۰۹:۰۰ تا ۱۱:۰۰ تهران، یک بار در روز (خالی باشه رد می‌شه و علامت نمی‌خوره)
+        if not only_night and 540 <= m < 660 and not dg.get("morning"):
+            try:
+                if send_digest(state, "morning", day_id, th):
+                    save_state(state)
+            except Exception as ex:
+                print("morning digest error:", repr(ex))
+
+        # تابلو قیمت پین‌شده: با لیست قیمت تازه‌ی همین نوبت تازه می‌شه (خرابی‌ش خبرها رو خراب نمی‌کنه)
+        if update_price_board(state, to_post, day_id, th):
+            save_state(state)
+
+        # شام خبری: ۲۳:۰۰ تا ۰۰:۴۵ تهران، همیشه قبل از «شب بخیر»؛ اگه اجرا دیر شروع شد
+        # (نوبت شب بخیر یا only_night) و شام هنوز نرفته بود، همین‌جا قبل از شب بخیر می‌ره
+        if not dg.get("dinner") and (1380 <= m or m < 45 or post or only_night):
+            try:
+                if send_digest(state, "dinner", day_id, th):
+                    save_state(state)
+            except Exception as ex:
+                print("dinner digest error:", repr(ex))
 
         for kind, p in post:
             LAST_TG_ERROR[0] = ""
@@ -2348,6 +2659,7 @@ def run_once():
         state["seeded"] = list(seeded)
         state["titles"] = recent[-400:]
         state["kiosk"] = ks
+        state["digests"] = dg
         save_state(state)
     if only_night:
         return "quiet" if ks["night"] else "night_wait"
