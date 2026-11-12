@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-12-g"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-j"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -176,12 +176,16 @@ def clean(text, limit):
     text = html.unescape(text)
     text = strip_sources(text.strip())
     if len(text) > limit:
-        text = text[:limit].rsplit(" ", 1)[0] + "…"
+        # برش تیتر بدون «…»؛ از مرز کلمه کوتاه می‌شه
+        text = text[:limit].rsplit(" ", 1)[0]
     return text
 
 
-def clean_paras(raw, limit=3200):
-    """متن رو به پاراگراف‌های تمیز (بدون منبع) تبدیل می‌کنه."""
+def clean_paras(raw, limit=12000):
+    """متن رو به پاراگراف‌های تمیز (بدون منبع) تبدیل می‌کنه.
+    نسخه‌ی h: سقف از ۳۲۰۰ به ۱۲۰۰۰ رفت و دیگه هیچ پاراگرافی نصفه با «…»
+    بریده نمی‌شه؛ اگه متن از سقف رد شد، فقط از مرز پاراگراف متوقف می‌شه.
+    خبرهای معمولیِ این منابع عملاً زیر ۱۲۰۰۰ کاراکترن و کامل می‌رسن."""
     raw = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", raw or "")
     text = html.unescape(re.sub(r"<[^>]+>", " ", raw))
     paras, total = [], 0
@@ -190,10 +194,7 @@ def clean_paras(raw, limit=3200):
         if len(line) < 6:
             continue
         if total + len(line) > limit:
-            room = limit - total
-            if room > 60:
-                paras.append(line[:room].rsplit(" ", 1)[0] + "…")
-            break
+            break   # پاراگراف نصفه اضافه نمی‌شه، «…» هم گذاشته نمی‌شه
         paras.append(line)
         total += len(line)
     return paras
@@ -972,7 +973,7 @@ def fetch_tg(category, name, domestic):
                 if len(lines) > 1 and len(lines[0].split()) <= 2:   # مثلاً «فوری»: تیتر واقعی خط بعدیه
                     title = clean(lines[0] + " " + lines[1], 200)
                     rest = lines[2:]
-                paras = [x for x in clean_paras("\n".join(rest), 3200) if x != title]
+                paras = [x for x in clean_paras("\n".join(rest), 12000) if x != title]
             if not title:
                 continue
             if name in POLITICAL_SKIP_CHANNELS and not kind and is_political(title + " " + (paras[0] if paras else "")):
@@ -1023,7 +1024,7 @@ def fetch_feed(category, url, domestic):
                 continue
             if "euronews" in url and (re.match(r"\s*مجله[\s\u200c]*خبری", title) or "mglh-khbri" in (e.get("link") or "")):
                 continue   # «مجله خبری» یورونیوز منتشر نمی‌شه
-            paras = strip_end_source([p for p in clean_paras(e.get("summary", ""), 3200) if p != title])
+            paras = strip_end_source([p for p in clean_paras(e.get("summary", ""), 12000) if p != title])
             summary = " ".join(paras)
             if len(summary) < 20:
                 paras, summary = [], ""
@@ -1277,6 +1278,25 @@ def build_text(item, max_len=4000):
         paras.pop()
         text = assemble(paras)
     return text
+
+
+def _fit_one_message(text, max_len=4000):
+    """متن رو برای «یک پیام» جا می‌کنه (نسخه‌ی j: هر خبر دقیقاً یک پست).
+    فقط از مرز پاراگراف کم می‌شه؛ وسط جمله «…» گذاشته نمی‌شه. سقف ۴۰۰۰
+    زیر سقف ۴۰۹۶ تلگرامه تا پیام هیچ‌وقت به‌خاطر بلندی رد نشه."""
+    if len(text) <= max_len:
+        return text
+    blocks = text.split("\n\n")
+    out, total = [], 0
+    for b in blocks:
+        add = len(b) + (2 if out else 0)
+        if out and total + add > max_len:
+            break
+        out.append(b)
+        total += add
+    if not out:   # یک بلوکِ تنها که خودش از سقف رد شد: از مرز کلمه
+        return blocks[0][:max_len].rsplit(" ", 1)[0]
+    return "\n\n".join(out)
 
 
 # ====== هشدار به ادمین (چت خصوصی) ======
@@ -1919,18 +1939,21 @@ def _record_sent_ids():
         st["last_post_ids"] = list(LAST_TG_IDS[-10:])
 
 def send(item):
-    """همه‌ی عکس‌ها و فیلم‌های یک خبر با هم در یک پست می‌رن (یک sendMediaGroup).
+    """هر خبر دقیقاً یک پست می‌شه (نسخه‌ی j: هیچ خبری تکه‌تکه نمی‌ره).
+    همه‌ی عکس‌ها و فیلم‌های یک خبر با هم در یک پست می‌رن (یک sendMediaGroup).
     اگه گروه رسانه کاملاً شکست خورد، به‌جای یک عکسِ تنها که بقیه‌ی رسانه‌ها رو
-    دور می‌ریزه، فقط متن فرستاده می‌شه. تک‌رسانه‌ای بودن با send_single مشکلی نداره."""
+    دور می‌ریزه، فقط متن فرستاده می‌شه. تک‌رسانه‌ای بودن با send_single مشکلی نداره.
+    متن با build_text تا سقف یک پیام (۴۰۰۰) جا می‌شه؛ وسط جمله «…» نمی‌آد."""
     LAST_TG_IDS.clear()
     media = media_list(item)
-    full_text = build_text(item)  # حداکثر ۴۰۰۰، بدون بریدن آخر متن
+    full_text = build_text(item)  # یک پیام، حداکثر ۴۰۰۰ کاراکتر
     up = str(item.get("id", "")).startswith("tg:")   # تلگرام لینک عکس کانال‌ها رو نمی‌تونه بگیره؛ مستقیم آپلود
     ok = False
     if not media:
         ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
     elif len(full_text) > 1000:
-        # متن طولانی با عکس: اول عکس بدون کپشن، بعد متن کامل جداگانه (نه بریده با …)
+        # متن طولانی با عکس: اول عکس بدون کپشن، بعد متن کامل در یک پیام جداگانه
+        # (کپشن تلگرام بیشتر از ۱۰۲۴ کاراکتر نمی‌گیره؛ خود خبر تکه نمی‌شه)
         if len(media) >= 2:
             if send_group(media, "", up):
                 ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
@@ -1962,7 +1985,10 @@ def plain_of(h):
 
 def deliver(text, media):
     """همه‌ی رسانه‌ها با هم در یک گروه می‌رن؛ اگه گروه کاملاً شکست خورد، فقط متن
-    فرستاده می‌شه (نه یک عکس تنها که بقیه‌ی رسانه‌ها رو دور بریزه)."""
+    فرستاده می‌شه (نه یک عکس تنها که بقیه‌ی رسانه‌ها رو دور بریزه).
+    نسخه‌ی j: متن همیشه در یک پیام می‌ره؛ اگه از سقف یک پیام رد شد، فقط از مرز
+    پاراگراف جا می‌شه (بدون «…» وسط جمله)."""
+    text = _fit_one_message(text)
     if media and len(text) > 1000:   # کپشن تلگرام حداکثر ۱۰۲۴ کاراکتره: اول عکس، بعد متن
         if len(media) >= 2:
             if send_group(media, "", True):
@@ -2003,7 +2029,7 @@ def send_special(text, media, proxy):
         PARSE_MODE[0] = "HTML"
 
 
-# ====== خلاصه‌ی صبحانه و شام خبری (نسخه‌ی d) ======
+# ====== خلاصه‌ی صبحانه و شام خبری (نسخه‌ی d؛ قالب نسخه‌ی h) ======
 # هر خبر معمولیِ موفق در state["today_top"] ثبت می‌شه (حداکثر ۵۰ تا؛ لیست قیمت
 # و کیوسک ثبت نمی‌شن). با عوض شدن «روز» کانال، today_top به prev_top منتقل می‌شه
 # تا صبحانه خبری بتونه از خبرهای شب قبل هم استفاده کنه.
@@ -2046,22 +2072,24 @@ def rank_top(entries):
                   key=lambda e: (0 if e.get("red") else 1, -(e.get("ts") or 0)))
 
 
-def build_digest_text(title, date_str, entries):
-    """متن خلاصه: تیتر + تاریخ، لیست شماره‌دار (ایموجی + تیتر)، آخرش @GodNews24.
+def build_digest_text(title, entries):
+    """متن خلاصه (نسخه‌ی h): تیتر بدون تاریخ، خبرها بدون شماره و با یک خط
+    خالی بین هر خبر، آخرش پروکسی و بعد @GodNews24.
     حداکثر ۱۰ خبر، حداکثر ۴۰۰۰ کاراکتر؛ خالی باشه رشته‌ی خالی برمی‌گرده."""
     ranked = rank_top(entries)[:10]
     if not ranked:
         return ""
 
     def assemble(max_title):
-        lines = [f"{title} — {date_str}"]
-        for i, e in enumerate(ranked, 1):
+        parts = [title]
+        for e in ranked:
             t = (e.get("t") or "").strip()
             if len(t) > max_title:
-                t = t[:max_title].rstrip() + "…"
-            lines.append(f"{i}. {e.get('e') or '🔵'} {t}")
-        lines.append(CHANNEL)
-        return "\n".join(lines)
+                t = t[:max_title].rsplit(" ", 1)[0]   # بدون «…»؛ از مرز کلمه کوتاه می‌شه
+            parts.append(f"{e.get('e') or '🔵'} {t}")
+        parts.append(proxy_parts()[0])
+        parts.append(CHANNEL)
+        return "\n\n".join(parts)
 
     text = assemble(200)
     for max_title in (150, 100, 60):
@@ -2086,11 +2114,11 @@ def send_digest(state, kind, day_id, th):
         return False
     if kind == "morning":
         entries = list(state.get("prev_top") or []) + list(state.get("today_top") or [])
-        title = "🍳 صبحانه خبری گادنیوز"
+        title = "🍳 صبحانه خبری گادنیوز ۲۴"
     else:
         entries = list(state.get("today_top") or [])
-        title = "🍽️ شام خبری گادنیوز"
-    text = build_digest_text(title, day_id, entries)
+        title = "🍽️ شام خبری گادنیوز ۲۴"
+    text = build_digest_text(title, entries)
     if not text:
         return False
     try:
@@ -2518,9 +2546,13 @@ def run_once():
             except Exception as ex:
                 print("morning digest error:", repr(ex))
 
-        # شام خبری: ۲۳:۰۰ تا ۰۰:۴۵ تهران، همیشه قبل از «شب بخیر»؛ اگه اجرا دیر شروع شد
-        # (نوبت شب بخیر یا only_night) و شام هنوز نرفته بود، همین‌جا قبل از شب بخیر می‌ره
-        if not dg.get("dinner") and (1380 <= m or m < 45 or post or only_night):
+        # شام خبری (نسخه‌ی i): فقط در همان دوری که «شب بخیر» فرستاده می‌شه،
+        # درست قبل از اون — یعنی پیام یکی‌مانده‌به‌آخر. قبلاً ساعت ۲۳:۰۰ به‌تنهایی
+        # شام رو می‌فرستاد و بعدش تا شب بخیر خبرهای معمولی می‌اومدن، پس شام
+        # یکی‌مانده‌به‌آخر نبود. اگه شب بخیر توی این دور پیدا نشد، شام هم نمی‌ره
+        # تا دوری که شب بخیر پیدا بشه؛ توی only_night (اجرای دیرهنگام ۰۱:۰۰ تا
+        # ۰۱:۴۰) هم همین‌جا، قبل از شب بخیر، فرستاده می‌شه.
+        if not dg.get("dinner") and (post or only_night):
             try:
                 if send_digest(state, "dinner", day_id, th):
                     save_state(state)
