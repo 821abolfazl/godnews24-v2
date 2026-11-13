@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-k"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-l"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1397,12 +1397,14 @@ FEW_PROXIES = 5
 POLL_SECONDS = 60      # هر چند ثانیه فرمان‌های ادمین خونده بشه (در حالت حلقه)
 
 
-def admin_send(text, html_mode=False):
+def admin_send(text, html_mode=False, reply_markup=None):
     if not ADMIN_CHAT_ID:
         return False
     data = {"chat_id": ADMIN_CHAT_ID, "text": text[:3900], "disable_web_page_preview": "true"}
     if html_mode:
         data["parse_mode"] = "HTML"
+    if reply_markup is not None:
+        data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
     try:
         r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=data, timeout=20)
         if not r.ok:
@@ -1577,7 +1579,30 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/send متن ← ارسال متن دلخواه به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع ← بی‌صدا کردن موقت یک منبع\n/unmute منبع ← برگردوندن منبع\n/muted ← لیست منبع‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
-             "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن")
+             "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
+
+
+# ====== منوی دکمه‌ای (ReplyKeyboard) در چت خصوصی ادمین ======
+# دکمه‌ها فقط دستورهای بدون آرگومان‌اند؛ متن دکمه به دستور نگاشت می‌شه.
+MENU_BUTTONS = [
+    ("📊 وضعیت", "/status"),
+    ("📈 آمار", "/stats"),
+    ("⏸ توقف", "/pause"),
+    ("▶️ ادامه", "/resume"),
+    ("📜 قوانین", "/rules"),
+    ("🚫 ردشده‌ها", "/skipped"),
+    ("⚠️ خطاها", "/errors"),
+    ("🧪 تست", "/test"),
+    ("🔇 بی‌صداها", "/muted"),
+    ("❓ راهنما", "/help"),
+]
+MENU_TEXT_TO_CMD = {label: cmd for label, cmd in MENU_BUTTONS}
+
+def menu_keyboard():
+    rows = []
+    for i in range(0, len(MENU_BUTTONS), 2):
+        rows.append([{"text": label} for label, _ in MENU_BUTTONS[i:i + 2]])
+    return {"keyboard": rows, "resize_keyboard": True}
 
 
 # ====== دستورهای جدید: /send /delete /mute /stats /rules ======
@@ -1611,7 +1636,9 @@ def handle_command(state, cmd, full_text=""):
     parts = full_text.strip().split(None, 1)
     arg = parts[1].strip() if len(parts) > 1 else ""
     if cmd in ("/start", "/help"):
-        admin_send(HELP_TEXT)
+        admin_send(HELP_TEXT, reply_markup=menu_keyboard())
+    elif cmd == "/menu":
+        admin_send("منوی ربات 👇\nروی دکمه بزن؛ دستور همون دکمه اجرا می‌شه.", reply_markup=menu_keyboard())
     elif cmd == "/status":
         admin_send(status_text(state))
     elif cmd == "/stats":
@@ -1801,6 +1828,8 @@ def process_commands(state):
         text = (msg.get("text") or "").strip()
         if text.startswith("/"):
             handle_command(state, text.split()[0].split("@")[0].lower(), text)
+        elif text in MENU_TEXT_TO_CMD:
+            handle_command(state, MENU_TEXT_TO_CMD[text], text)
     return changed
 
 
