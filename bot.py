@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-n"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-o"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1002,34 +1002,10 @@ def fetch_tg(category, name, domestic):
     return items
 
 
-# ====== پست کوتاه برای خبرهای علمی ایندیپندنت فارسی (نسخه‌ی k) ======
+# ====== پست کوتاه برای همه‌ی خبرهای ایندیپندنت فارسی (نسخه‌ی o؛ قبلاً فقط علمی، نسخه‌ی k) ======
 # فید این سایت به‌جای خلاصه، متن کامل مقاله (چند هزار کاراکتر) رو می‌ده؛ پس
-# خبرهاش خیلی طولانی می‌شدن و عکس‌شون هم جدا از متن می‌رفت. خبر علمی کوتاه
-# می‌شه (تیتر + شروع متن، تا ۶۰۰ کاراکتر) تا عکس و متن با هم در یک پست برن.
-SCIENCE_SECTIONS = ["علم", "فناوری", "دانش", "بهداشت", "درمان", "سلامت", "پزشکی",
-                    "زندگی", "محیط زیست", "محیط‌زیست", "فضا", "نجوم"]
-SCIENCE_KW = ["علم", "علمی", "فناوری", "دانشمند", "پژوهش", "تحقیق", "فضا", "ناسا",
-              "بهداشت", "درمان", "سلامت", "پزشکی", "تغذیه", "مغز", "واکسن",
-              "سیاره", "کهکشان", "فیزیک", "شیمی", "زیست‌شناسی", "اقلیم", "محیط زیست",
-              "محیط‌زیست", "افسردگی", "بیماری", "تلسکوپ", "ماهواره", "ربات"]
-_SCIENCE_RE = None
-
-
-def is_science_post(link, title, summary):
-    """خبر علمیه؟ اول از بخشِ توی آدرس لینک (مثلاً /زندگی/ یا /بهداشت-و-درمان/ —
-    آدرس درصدگذاری‌شده‌ست، پس اول بازش می‌کنیم)، بعد از کلمه‌های تیتر و متن
-    (با مرز کلمه، مثل بقیه‌ی کلمه‌های ربات؛ «ژنرال» ژن حساب نمی‌شه)."""
-    global _SCIENCE_RE
-    try:
-        path = unquote(link or "")
-    except Exception:
-        path = link or ""
-    for s in SCIENCE_SECTIONS:
-        if s in path:
-            return True
-    if _SCIENCE_RE is None:
-        _SCIENCE_RE = rx(*SCIENCE_KW)
-    return bool(_SCIENCE_RE.search((title or "") + " " + (summary or "")))
+# خبرهاش خیلی طولانی می‌شدن و عکس‌شون هم جدا از متن می‌رفت. همه‌ی خبرهاش کوتاه
+# می‌شن (تیتر + شروع متن، تا ۶۰۰ کاراکتر) تا عکس و متن با هم در یک پست برن.
 
 
 def _short_paras(paras, limit=600):
@@ -1071,10 +1047,9 @@ def fetch_feed(category, url, domestic):
             if "euronews" in url and (re.match(r"\s*مجله[\s\u200c]*خبری", title) or "mglh-khbri" in (e.get("link") or "")):
                 continue   # «مجله خبری» یورونیوز منتشر نمی‌شه
             paras = strip_end_source([p for p in clean_paras(e.get("summary", ""), 12000) if p != title])
-            # ایندیپندنت فارسی علمی: متن کامل مقاله‌ست، نه خلاصه؛ کوتاه می‌شه تا
-            # عکس و متن با هم در یک پست (کپشن) برن، نه جدا از هم
-            short_post = "independentpersian" in url and is_science_post(
-                e.get("link", ""), title, e.get("summary", ""))
+            # ایندیپندنت فارسی، همه‌ی خبرها: متن کامل مقاله‌ست، نه خلاصه؛ کوتاه
+            # می‌شه تا عکس و متن با هم در یک پست (کپشن) برن، نه جدا از هم
+            short_post = "independentpersian" in url
             if short_post:
                 paras = _short_paras(paras, 600)
             summary = " ".join(paras)
@@ -2097,7 +2072,7 @@ def send(item):
     if not media:
         ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
     elif item.get("short"):
-        # پست کوتاه (علمی ایندیپندنت): عکس و متن با هم در یک پست می‌رن (کپشن)؛
+        # پست کوتاه (ایندیپندنت فارسی): عکس و متن با هم در یک پست می‌رن (کپشن)؛
         # اگه کپشن به هر دلیلی نرفت، متن تنها در یک پیام می‌ره
         caption = build_text(item, max_len=1000)
         if len(media) >= 2:
