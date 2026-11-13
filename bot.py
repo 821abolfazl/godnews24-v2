@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-l"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-m"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1595,8 +1595,36 @@ MENU_BUTTONS = [
     ("🧪 تست", "/test"),
     ("🔇 بی‌صداها", "/muted"),
     ("❓ راهنما", "/help"),
+    ("✉️ ارسال خبر", "/send"),
+    ("🗑 حذف آخرین پست", "/delete"),
+    ("🔕 بی‌صدا کردن", "/mute"),
+    ("🔔 برگردوندن منبع", "/unmute"),
+    ("🚫 مسدود کردن", "/block"),
+    ("➕ اضافه به ایموجی", "/add"),
+    ("✂️ پاک‌شونده اضافه", "/strip"),
+    ("↩️ پاک‌شونده حذف", "/unstrip"),
 ]
 MENU_TEXT_TO_CMD = {label: cmd for label, cmd in MENU_BUTTONS}
+
+# دکمه‌هایی که آرگومان می‌خوان: اول این پیام رو می‌فرسته، پیام بعدی ادمین آرگومان حساب می‌شه.
+# (chr(10) یعنی خط جدید؛ برای اینکه تو متن سورس بک‌اسلش-n ننویسیم.)
+MENU_PROMPTS = {
+    "/send": chr(10).join(["متن خبر رو بفرست تا به کانال بفرستم.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/mute": chr(10).join(["اسم منبع رو بفرست (مثلاً AloNews).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/unmute": chr(10).join(["اسم منبعی که می‌خوای برگرده رو بفرست (مثلاً AloNews).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/block": chr(10).join(["کلمه‌ی ممنوع رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/add": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/strip": chr(10).join(["عبارت پاک‌شونده رو بفرست (مثلاً / ایسنا).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/unstrip": chr(10).join(["عبارتی که می‌خوای از پاک‌شونده‌ها حذف بشه رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+}
+MENU_PENDING_TIMEOUT = 600  # ثانیه؛ اگه ادمین تا این مدت جواب نده، انتظار لغو می‌شه
+
+# همه‌ی دستورهایی که handle_command می‌شناسه؛ برای اینکه وقتی منتظر آرگومانیم،
+# متنی که با «/» شروع می‌شه ولی دستور نیست (مثلاً «/ ایسنا») آرگومان حساب بشه.
+KNOWN_COMMANDS = {"/start", "/help", "/menu", "/status", "/stats", "/rules",
+                  "/block", "/add", "/strip", "/unstrip", "/send", "/delete",
+                  "/mute", "/unmute", "/muted", "/skipped", "/errors", "/ads",
+                  "/pause", "/resume", "/test"}
 
 def menu_keyboard():
     rows = []
@@ -1826,10 +1854,41 @@ def process_commands(state):
         if str((msg.get("chat") or {}).get("id")) != ADMIN_CHAT_ID:
             continue
         text = (msg.get("text") or "").strip()
-        if text.startswith("/"):
-            handle_command(state, text.split()[0].split("@")[0].lower(), text)
-        elif text in MENU_TEXT_TO_CMD:
-            handle_command(state, MENU_TEXT_TO_CMD[text], text)
+        if not text:
+            continue
+        pending = state.get("menu_pending")
+        if pending and time.time() - float(state.get("menu_pending_ts") or 0) > MENU_PENDING_TIMEOUT:
+            state["menu_pending"] = None
+            state.pop("menu_pending_ts", None)
+            pending = None
+        if text in ("لغو", "❌ لغو"):
+            if pending:
+                state["menu_pending"] = None
+                state.pop("menu_pending_ts", None)
+                admin_send("لغو شد.", reply_markup=menu_keyboard())
+            continue
+        first = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+        if text in MENU_TEXT_TO_CMD:
+            cmd = MENU_TEXT_TO_CMD[text]
+            if cmd in MENU_PROMPTS:
+                state["menu_pending"] = cmd
+                state["menu_pending_ts"] = time.time()
+                admin_send(MENU_PROMPTS[cmd])
+            else:
+                state["menu_pending"] = None
+                state.pop("menu_pending_ts", None)
+                handle_command(state, cmd, text)
+        elif text.startswith("/") and first in KNOWN_COMMANDS:
+            state["menu_pending"] = None
+            state.pop("menu_pending_ts", None)
+            handle_command(state, first, text)
+        elif pending:
+            cmd = pending
+            state["menu_pending"] = None
+            state.pop("menu_pending_ts", None)
+            handle_command(state, cmd, cmd + " " + text)
+        elif text.startswith("/"):
+            handle_command(state, first, text)
     return changed
 
 
