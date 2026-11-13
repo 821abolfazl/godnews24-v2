@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-m"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-n"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1405,14 +1405,19 @@ def admin_send(text, html_mode=False, reply_markup=None):
         data["parse_mode"] = "HTML"
     if reply_markup is not None:
         data["reply_markup"] = json.dumps(reply_markup, ensure_ascii=False)
-    try:
-        r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=data, timeout=20)
-        if not r.ok:
+    # اگه ارسال اول ناموفق بود، یک بار دیگه تلاش می‌کنه تا تأییدیه به ادمین برسه
+    # (مثلاً وقتی «بسنت» ثبت شد ولی پیام «✅ اضافه شد» نرسید)
+    for _attempt in (1, 2):
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=data, timeout=20)
+            if r.ok:
+                return True
             print("  admin send failed:", r.status_code, r.text[:120])
-        return r.ok
-    except requests.RequestException as ex:
-        print("  admin send network error:", type(ex).__name__)
-        return False
+        except requests.RequestException as ex:
+            print("  admin send network error:", type(ex).__name__)
+        if _attempt == 1:
+            time.sleep(3)
+    return False
 
 
 def day_stats(state, day_id):
