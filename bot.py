@@ -9,11 +9,11 @@ from datetime import datetime, timedelta, timezone
 import random
 import socket
 import requests
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-j"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-k"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1002,6 +1002,52 @@ def fetch_tg(category, name, domestic):
     return items
 
 
+# ====== پست کوتاه برای خبرهای علمی ایندیپندنت فارسی (نسخه‌ی k) ======
+# فید این سایت به‌جای خلاصه، متن کامل مقاله (چند هزار کاراکتر) رو می‌ده؛ پس
+# خبرهاش خیلی طولانی می‌شدن و عکس‌شون هم جدا از متن می‌رفت. خبر علمی کوتاه
+# می‌شه (تیتر + شروع متن، تا ۶۰۰ کاراکتر) تا عکس و متن با هم در یک پست برن.
+SCIENCE_SECTIONS = ["علم", "فناوری", "دانش", "بهداشت", "درمان", "سلامت", "پزشکی",
+                    "زندگی", "محیط زیست", "محیط‌زیست", "فضا", "نجوم"]
+SCIENCE_KW = ["علم", "علمی", "فناوری", "دانشمند", "پژوهش", "تحقیق", "فضا", "ناسا",
+              "بهداشت", "درمان", "سلامت", "پزشکی", "تغذیه", "مغز", "واکسن",
+              "سیاره", "کهکشان", "فیزیک", "شیمی", "زیست‌شناسی", "اقلیم", "محیط زیست",
+              "محیط‌زیست", "افسردگی", "بیماری", "تلسکوپ", "ماهواره", "ربات"]
+_SCIENCE_RE = None
+
+
+def is_science_post(link, title, summary):
+    """خبر علمیه؟ اول از بخشِ توی آدرس لینک (مثلاً /زندگی/ یا /بهداشت-و-درمان/ —
+    آدرس درصدگذاری‌شده‌ست، پس اول بازش می‌کنیم)، بعد از کلمه‌های تیتر و متن
+    (با مرز کلمه، مثل بقیه‌ی کلمه‌های ربات؛ «ژنرال» ژن حساب نمی‌شه)."""
+    global _SCIENCE_RE
+    try:
+        path = unquote(link or "")
+    except Exception:
+        path = link or ""
+    for s in SCIENCE_SECTIONS:
+        if s in path:
+            return True
+    if _SCIENCE_RE is None:
+        _SCIENCE_RE = rx(*SCIENCE_KW)
+    return bool(_SCIENCE_RE.search((title or "") + " " + (summary or "")))
+
+
+def _short_paras(paras, limit=600):
+    """پست کوتاه: فقط پاراگراف‌های اول تا سقف کاراکتر؛ از مرز پاراگراف، بدون «…».
+    اگه پاراگراف اولِ تنها از سقف رد شد، از مرز کلمه کوتاه می‌شه."""
+    out, total = [], 0
+    for p in paras:
+        if total + len(p) <= limit:
+            out.append(p)
+            total += len(p)
+        elif not out:
+            cut = p[:limit].rsplit(" ", 1)[0]
+            out.append(cut or p[:limit])
+        else:
+            break
+    return out
+
+
 def fetch_feed(category, url, domestic):
     if url.startswith("tg:"):
         return fetch_tg(category, url[3:], domestic)
@@ -1025,6 +1071,12 @@ def fetch_feed(category, url, domestic):
             if "euronews" in url and (re.match(r"\s*مجله[\s\u200c]*خبری", title) or "mglh-khbri" in (e.get("link") or "")):
                 continue   # «مجله خبری» یورونیوز منتشر نمی‌شه
             paras = strip_end_source([p for p in clean_paras(e.get("summary", ""), 12000) if p != title])
+            # ایندیپندنت فارسی علمی: متن کامل مقاله‌ست، نه خلاصه؛ کوتاه می‌شه تا
+            # عکس و متن با هم در یک پست (کپشن) برن، نه جدا از هم
+            short_post = "independentpersian" in url and is_science_post(
+                e.get("link", ""), title, e.get("summary", ""))
+            if short_post:
+                paras = _short_paras(paras, 600)
             summary = " ".join(paras)
             if len(summary) < 20:
                 paras, summary = [], ""
@@ -1035,7 +1087,7 @@ def fetch_feed(category, url, domestic):
             image, video = find_media(e)
             items.append({"id": uid, "title": title, "summary": summary, "paras": paras,
                           "category": category, "domestic": domestic, "image": image, "video": video, "ts": ts,
-                          "src": urlparse(url).netloc})
+                          "src": urlparse(url).netloc, "short": short_post})
     except Exception as ex:
         print("feed error:", url, ex)
     RSS_READ[url] = len(items)
@@ -1951,6 +2003,20 @@ def send(item):
     ok = False
     if not media:
         ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+    elif item.get("short"):
+        # پست کوتاه (علمی ایندیپندنت): عکس و متن با هم در یک پست می‌رن (کپشن)؛
+        # اگه کپشن به هر دلیلی نرفت، متن تنها در یک پیام می‌ره
+        caption = build_text(item, max_len=1000)
+        if len(media) >= 2:
+            if send_group(media, caption, up):
+                ok = True
+            else:
+                print("  media group failed; sending text only (no single-media fallback that drops media)")
+                ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+        elif send_single(media[0][0], media[0][1], caption, up):
+            ok = True
+        else:
+            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
     elif len(full_text) > 1000:
         # متن طولانی با عکس: اول عکس بدون کپشن، بعد متن کامل در یک پیام جداگانه
         # (کپشن تلگرام بیشتر از ۱۰۲۴ کاراکتر نمی‌گیره؛ خود خبر تکه نمی‌شه)
