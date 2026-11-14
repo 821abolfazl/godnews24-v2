@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-q"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-r"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1653,25 +1653,28 @@ def _pending_media(msg):
 
 def send_media_to_channel(state, kind, file_id, caption):
     """عکس/ویدیوی ادمین رو با همون قاعده‌ی /send متنی به کانال می‌فرسته:
-    پروکسی (متن ساده) و @GodNews24 آخر کپشن؛ اگه کپشن + دنباله از ۱۰۲۴ حرف
+    پروکسی (لینک روی کلمه‌ی «پروکسی») و @GodNews24 آخر کپشن؛ اگه کپشن + دنباله از ۱۰۲۴ حرف
     بیشتر شد، رسانه بدون کپشن می‌ره و متن کامل جدا فرستاده می‌شه."""
     if not file_id:
         admin_send("❌ فایل رسانه پیدا نشد؛ دوباره بفرست.")
         return
+    # کپشن با HTML فرستاده می‌شه تا لینک پروکسی روی خود کلمه‌ی «پروکسی» بشینه
+    # (مثل پست‌های عادی خبر)، نه اینکه آدرس کامل لینک دیده بشه؛ متن کاربر
+    # escape می‌شه تا «<» و «&» توی کپشن، HTML رو خراب نکنه.
     text = (caption or "").rstrip()
     if text.endswith(CHANNEL):
-        full = text
+        full = html.escape(text)
     else:
-        p_plain = proxy_parts()[1]
+        p_html = proxy_parts()[0]
         tail = []
-        if "://" in p_plain:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
-            tail.append(p_plain)
+        if "://" in p_html:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
+            tail.append(p_html)
         tail.append(CHANNEL)
-        full = "\n\n".join(x for x in (text, "\n".join(tail)) if x)
+        full = "\n\n".join(x for x in (html.escape(text), "\n".join(tail)) if x)
     method, field = ("sendVideo", "video") if kind == "video" else ("sendPhoto", "photo")
     LAST_TG_IDS.clear()
     old_mode = PARSE_MODE[0]
-    PARSE_MODE[0] = None
+    PARSE_MODE[0] = "HTML"
     try:
         if len(full) <= 1024:
             ok = tg(method, **{field: file_id, "caption": full})
