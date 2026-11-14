@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-o"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-p"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1556,7 +1556,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/skipped ← همه‌ی پست‌های ردشده‌ی امروز (تبلیغ، کلمه‌ی ممنوع، سیاسی، شوخی و...)\n"
              "/errors ← پست‌هایی که امروز ارسالشون خطا داد\n"
              "/test ← بررسی دسترسی ربات به کانال و نمونه‌ی قالب پست\n"
-             "/send متن ← ارسال متن دلخواه به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
+             "/send متن یا عکس ← ارسال خبر دلخواه (متن یا عکس/ویدیو) به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع ← بی‌صدا کردن موقت یک منبع\n/unmute منبع ← برگردوندن منبع\n/muted ← لیست منبع‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
              "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
@@ -1589,7 +1589,7 @@ MENU_TEXT_TO_CMD = {label: cmd for label, cmd in MENU_BUTTONS}
 # دکمه‌هایی که آرگومان می‌خوان: اول این پیام رو می‌فرسته، پیام بعدی ادمین آرگومان حساب می‌شه.
 # (chr(10) یعنی خط جدید؛ برای اینکه تو متن سورس بک‌اسلش-n ننویسیم.)
 MENU_PROMPTS = {
-    "/send": chr(10).join(["متن خبر رو بفرست تا به کانال بفرستم.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/send": chr(10).join(["متن یا عکس/ویدیوی خبر رو بفرست تا به کانال بفرستم.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/mute": chr(10).join(["اسم منبع رو بفرست (مثلاً AloNews).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/unmute": chr(10).join(["اسم منبعی که می‌خوای برگرده رو بفرست (مثلاً AloNews).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/block": chr(10).join(["کلمه‌ی ممنوع رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
@@ -1638,6 +1638,61 @@ def source_muted_key(state, url):
 
 def _send_admin_text(text):
     return admin_send(text)
+
+
+def _pending_media(msg):
+    """اگه پیام عکس یا ویدیو داره، (نوع، file_id بزرگ‌ترین سایز) رو برمی‌گردونه؛ وگرنه (None, None)."""
+    video = msg.get("video") or {}
+    if video.get("file_id"):
+        return "video", video["file_id"]
+    photo = msg.get("photo") or []
+    if photo and photo[-1].get("file_id"):
+        return "photo", photo[-1]["file_id"]
+    return None, None
+
+
+def send_media_to_channel(state, kind, file_id, caption):
+    """عکس/ویدیوی ادمین رو با همون قاعده‌ی /send متنی به کانال می‌فرسته:
+    پروکسی (متن ساده) و @GodNews24 آخر کپشن؛ اگه کپشن + دنباله از ۱۰۲۴ حرف
+    بیشتر شد، رسانه بدون کپشن می‌ره و متن کامل جدا فرستاده می‌شه."""
+    if not file_id:
+        admin_send("❌ فایل رسانه پیدا نشد؛ دوباره بفرست.")
+        return
+    text = (caption or "").rstrip()
+    if text.endswith(CHANNEL):
+        full = text
+    else:
+        p_plain = proxy_parts()[1]
+        tail = []
+        if "://" in p_plain:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
+            tail.append(p_plain)
+        tail.append(CHANNEL)
+        full = "\n\n".join(x for x in (text, "\n".join(tail)) if x)
+    method, field = ("sendVideo", "video") if kind == "video" else ("sendPhoto", "photo")
+    LAST_TG_IDS.clear()
+    old_mode = PARSE_MODE[0]
+    PARSE_MODE[0] = None
+    try:
+        if len(full) <= 1024:
+            ok = tg(method, **{field: file_id, "caption": full})
+        else:
+            ok = tg(method, **{field: file_id})
+            if ok:
+                ok = tg("sendMessage", text=full, disable_web_page_preview="true")
+    finally:
+        PARSE_MODE[0] = old_mode
+    if ok:
+        ids = list(LAST_TG_IDS)
+        if ids:
+            state["last_post_ids"] = ids[-10:]
+            state["last_post"] = time.time()
+            try:
+                save_state(state)
+            except Exception:
+                pass
+        admin_send(f"✅ فرستاده شد. message_id: {ids[-1] if ids else '—'}")
+    else:
+        admin_send(f"❌ ارسال نشد. {LAST_TG_ERROR[0]}")
 
 def handle_command(state, cmd, full_text=""):
     full_text = full_text or cmd
@@ -1833,8 +1888,14 @@ def process_commands(state):
         msg = u.get("message") or {}
         if str((msg.get("chat") or {}).get("id")) != ADMIN_CHAT_ID:
             continue
+        # پیام عکس/ویدیو «text» نداره، کپشن داره؛ اگه فقط text رو بخونیم عکس‌ها
+        # بی‌صدا رد می‌شن (همین باگ /send بود).
         text = (msg.get("text") or "").strip()
+        caption = (msg.get("caption") or "").strip()
         if not text:
+            text = caption
+        kind, fid = _pending_media(msg)
+        if not text and not fid:
             continue
         pending = state.get("menu_pending")
         if pending and time.time() - float(state.get("menu_pending_ts") or 0) > MENU_PENDING_TIMEOUT:
@@ -1861,12 +1922,20 @@ def process_commands(state):
         elif text.startswith("/") and first in KNOWN_COMMANDS:
             state["menu_pending"] = None
             state.pop("menu_pending_ts", None)
-            handle_command(state, first, text)
+            if first == "/send" and fid:
+                # کپشنِ «/send ...» روی عکس/ویدیو: بقیه‌ی کپشن، کپشن رسانه می‌شه.
+                arg = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+                send_media_to_channel(state, kind, fid, arg)
+            else:
+                handle_command(state, first, text)
         elif pending:
             cmd = pending
             state["menu_pending"] = None
             state.pop("menu_pending_ts", None)
-            handle_command(state, cmd, cmd + " " + text)
+            if cmd == "/send" and fid:
+                send_media_to_channel(state, kind, fid, text)
+            else:
+                handle_command(state, cmd, cmd + " " + text)
         elif text.startswith("/"):
             handle_command(state, first, text)
     return changed
