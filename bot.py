@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-r"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-s"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1114,6 +1114,16 @@ def proxy_alive(link):
         return False
 
 
+PROXY_CHECKED_ONCE = [False]  # توی همین اجرا حداقل یک بار پروکسی‌ها چک شدن
+
+def ensure_proxies():
+    """اگه توی همین اجرا هنوز پروکسی‌ها چک نشدن (مثلاً فرمانی قبل از اولین
+    دور رسید)، همین‌جا چک می‌کنه تا فرمان بدون پروکسی نمونه."""
+    if not PROXY_CHECKED_ONCE[0]:
+        prepare_proxies()
+        PROXY_CHECKED_ONCE[0] = True
+
+
 def prepare_proxies(max_checks=150):
     """پروکسی‌ها رو هم‌زمان چک می‌کنه (سریع، تا ساعت‌های رایگان گیت‌هاب هدر نره). همه‌ی سالم‌ها استفاده می‌شن."""
     from concurrent.futures import ThreadPoolExecutor
@@ -1126,6 +1136,7 @@ def prepare_proxies(max_checks=150):
             ok = list(ex.map(proxy_alive, sample))
         ALIVE.extend(l for l, good in zip(sample, ok) if good)
     PROXY_INFO["total"], PROXY_INFO["checked"] = len(links), len(sample)
+    PROXY_CHECKED_ONCE[0] = True
     print(f"proxies: {len(links)} in file, {len(sample)} checked, {len(ALIVE)} alive")
 
 
@@ -1653,8 +1664,10 @@ def _pending_media(msg):
 
 def send_media_to_channel(state, kind, file_id, caption):
     """عکس/ویدیوی ادمین رو با همون قاعده‌ی /send متنی به کانال می‌فرسته:
-    پروکسی (لینک روی کلمه‌ی «پروکسی») و @GodNews24 آخر کپشن؛ اگه کپشن + دنباله از ۱۰۲۴ حرف
-    بیشتر شد، رسانه بدون کپشن می‌ره و متن کامل جدا فرستاده می‌شه."""
+    پروکسی (لینک روی کلمه‌ی «پروکسی») و @GodNews24 آخر کپشن؛ اگه کپشن خودش با
+    @GodNews24 تموم شده باشه، اول اون رو برمی‌داریم و پروکسی + @GodNews24 رو اضافه
+    می‌کنیم تا پروکسی جا نمونه؛ اگه کپشن + دنباله از ۱۰۲۴ حرف بیشتر شد، رسانه
+    بدون کپشن می‌ره و متن کامل جدا فرستاده می‌شه."""
     if not file_id:
         admin_send("❌ فایل رسانه پیدا نشد؛ دوباره بفرست.")
         return
@@ -1663,14 +1676,15 @@ def send_media_to_channel(state, kind, file_id, caption):
     # escape می‌شه تا «<» و «&» توی کپشن، HTML رو خراب نکنه.
     text = (caption or "").rstrip()
     if text.endswith(CHANNEL):
-        full = html.escape(text)
-    else:
-        p_html = proxy_parts()[0]
-        tail = []
-        if "://" in p_html:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
-            tail.append(p_html)
-        tail.append(CHANNEL)
-        full = "\n\n".join(x for x in (html.escape(text), "\n".join(tail)) if x)
+        # کاربر خودش @GodNews24 رو آخر کپشن گذاشته؛ اول برش می‌داریم و
+        # پروکسی + @GodNews24 رو مثل همیشه اضافه می‌کنیم تا پروکسی جا نمونه.
+        text = text[: -len(CHANNEL)].rstrip()
+    p_html = proxy_parts()[0]
+    tail = []
+    if "://" in p_html:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
+        tail.append(p_html)
+    tail.append(CHANNEL)
+    full = "\n\n".join(x for x in (html.escape(text), "\n".join(tail)) if x)
     method, field = ("sendVideo", "video") if kind == "video" else ("sendPhoto", "photo")
     LAST_TG_IDS.clear()
     old_mode = PARSE_MODE[0]
@@ -1873,6 +1887,7 @@ def process_commands(state):
     """فرمان‌های ادمین (فقط از چت خصوصی خودش) رو می‌خونه. True یعنی حافظه تغییر کرده."""
     if not ADMIN_CHAT_ID:
         return False
+    ensure_proxies()
     try:
         r = requests.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates",
                          params={"offset": state.get("tg_offset", 0), "timeout": 0,
@@ -2550,6 +2565,18 @@ def run_once():
             merge_remote_state(state, _remote)
     except Exception as ex:
         print("merge remote state error:", ex)
+    # پروکسی‌ها رو همین‌جا چک می‌کنه — قبل از اینکه فرمانی خونده بشه؛ وگرنه
+    # توی یه اجرای تازه، فرمانِ /send می‌تونست قبل از اولین چکِ پروکسی برسه
+    # و پست بدون پروکسی بره (پست ۱۷:۲۴ قیمت طلا و ارز، ۲۳ آبان ۱۴۰۵).
+    prepare_proxies()
+    state["alive_count"] = len(ALIVE)
+    state["proxy_total"], state["proxy_checked"] = PROXY_INFO["total"], PROXY_INFO["checked"]
+    if ALIVE and len(ALIVE) < FEW_PROXIES:
+        alert("fewproxy", f"⚠️ فقط {len(ALIVE)} پروکسی سالم مونده؛ proxies.txt را به‌روز کن.", 24)
+    if not ALIVE:
+        total = PROXY_INFO["total"]
+        alert("noproxy", "⚠️ پروکسی سالمی پیدا نشد؛ فایل proxies.txt را به‌روز کن."
+              if total else "⚠️ فایل proxies.txt خالی است و پروکسی ندارم.", 12)
     if process_commands(state):   # فرمان‌های ادمین (/pause ، /status و ...)
         save_state(state)
     now = time.time()
@@ -2600,18 +2627,9 @@ def run_once():
         if not force and 510 <= m < 780 and m - 510 > 30:
             alert("late", f"⚠️ امروز ربات ساعت {th:%H:%M} شروع شد (حدود {m - 510} دقیقه بعد از ۰۸:۳۰).", 0)
 
-    prepare_proxies()
-    state["alive_count"] = len(ALIVE)
-    state["proxy_total"], state["proxy_checked"] = PROXY_INFO["total"], PROXY_INFO["checked"]
-    if ALIVE and len(ALIVE) < FEW_PROXIES:
-        alert("fewproxy", f"⚠️ فقط {len(ALIVE)} پروکسی سالم مونده؛ proxies.txt را به‌روز کن.", 24)
     if ADMIN_CHAT_ID and not state.get("admin_hello"):
         if alert("hello", "✅ هشدارهای ربات GodNews24 فعال شد. اگه مشکلی پیش بیاد اینجا خبر می‌دم.", 0):
             state["admin_hello"] = True
-    if not ALIVE:
-        total = PROXY_INFO["total"]
-        alert("noproxy", "⚠️ پروکسی سالمی پیدا نشد؛ فایل proxies.txt را به‌روز کن."
-              if total else "⚠️ فایل proxies.txt خالی است و پروکسی ندارم.", 12)
     state.setdefault("last_post", now)
     seen = dict.fromkeys(state["seen"])   # ترتیب حفظ می‌شه
     seeded = set(state["seeded"])
