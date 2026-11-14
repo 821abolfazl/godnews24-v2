@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-p"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-q"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1369,7 +1369,7 @@ AD_STATS = {}          # نام کانال -> (تبلیغ ردشده، کل پس
 RSS_READ = {}          # آدرس RSS -> تعداد خبر خونده‌شده
 RATE_LIMITS = [0]      # تعداد خطای ۴۲۹ تلگرام در همین اجرا
 FEW_PROXIES = 5
-POLL_SECONDS = 60      # هر چند ثانیه فرمان‌های ادمین خونده بشه (در حالت حلقه)
+POLL_SECONDS = 10      # هر چند ثانیه فرمان‌های ادمین خونده بشه (در حالت حلقه)
 
 
 def admin_send(text, html_mode=False, reply_markup=None):
