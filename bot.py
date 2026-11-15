@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-s"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-t"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1791,18 +1791,23 @@ def handle_command(state, cmd, full_text=""):
         if not arg:
             admin_send("متن را هم بفرست. مثال: /send سلام به کانال")
             return
+        # متن با HTML فرستاده می‌شه تا لینک پروکسی روی خود کلمه‌ی «پروکسی» بشینه
+        # (مثل کپشن عکس/ویدیو در نسخه‌ی r)؛ متن کاربر escape می‌شه تا «<» و «&»
+        # HTML رو خراب نکنه. اگه متن خودش با @GodNews24 تموم شده باشه، اول اون
+        # رو برمی‌داریم و پروکسی + @GodNews24 رو اضافه می‌کنیم تا پروکسی جا نمونه
+        # (مثل کپشن رسانه در نسخه‌ی s).
         text = arg.rstrip()
-        if not text.endswith(CHANNEL):
-            # آخر متن: پروکسی (متن ساده، چون /send متن ساده می‌فرسته) و بعد @GodNews24
-            p_plain = proxy_parts()[1]
-            tail = []
-            if "://" in p_plain:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
-                tail.append(p_plain)
-            tail.append(CHANNEL)
-            text = text + "\n\n" + "\n".join(tail)
+        if text.endswith(CHANNEL):
+            text = text[: -len(CHANNEL)].rstrip()
+        p_html = proxy_parts()[0]
+        tail = []
+        if "://" in p_html:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
+            tail.append(p_html)
+        tail.append(CHANNEL)
+        text = "\n\n".join(x for x in (html.escape(text), "\n".join(tail)) if x)
         LAST_TG_IDS.clear()
         old_mode = PARSE_MODE[0]
-        PARSE_MODE[0] = None
+        PARSE_MODE[0] = "HTML"
         try:
             ok = tg("sendMessage", text=text, disable_web_page_preview="true")
         finally:
