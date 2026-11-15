@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-t"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-u"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1491,9 +1491,9 @@ def status_text(state):
     _dg = state.get("digests") or {}
     _dg_day = (tehran_now() - timedelta(hours=8)).strftime("%Y-%m-%d")
     if _dg.get("day") == _dg_day:
-        lines.append(f"🍳 صبحانه: {'✅' if _dg.get('morning') else '—'} | 🍽️ شام: {'✅' if _dg.get('dinner') else '—'}")
+        lines.append(f"🍳 صبحانه: {'✅' if _dg.get('morning') else '—'} | 🍽️ شام: {'✅' if _dg.get('dinner') else '—'} | 💌 حمایت: {'✅' if _dg.get('support') else '—'}")
     else:
-        lines.append("🍳 صبحانه: — | 🍽️ شام: —")
+        lines.append("🍳 صبحانه: — | 🍽️ شام: — | 💌 حمایت: —")
     if muted:
         lines.append(f"🔇 منبع‌های بی‌صدا: {', '.join(muted)}")
     return "\n".join(lines)
@@ -1570,7 +1570,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/send متن یا عکس ← ارسال خبر دلخواه (متن یا عکس/ویدیو) به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع ← بی‌صدا کردن موقت یک منبع\n/unmute منبع ← برگردوندن منبع\n/muted ← لیست منبع‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
-             "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
+             "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
 
 
 # ====== منوی دکمه‌ای (ReplyKeyboard) در چت خصوصی ادمین ======
@@ -2334,7 +2334,7 @@ def send_digest(state, kind, day_id, th):
     هیچ‌وقت ارسال خبرها رو خراب نمی‌کنه."""
     dg = state.get("digests") or {}
     if dg.get("day") != day_id:
-        dg = {"day": day_id, "morning": False, "dinner": False}
+        dg = {"day": day_id, "morning": False, "dinner": False, "support": False}
         state["digests"] = dg
     if dg.get(kind):
         return False
@@ -2358,6 +2358,37 @@ def send_digest(state, kind, day_id, th):
             return True
     except Exception as ex:
         print("digest error:", kind, repr(ex))
+    return False
+
+
+SUPPORT_TEXT = (
+    "دوستان تمام تلاشمون رو میکنیم که خبر های جدید و دقیق براتون بزاریم و پروکسی های وصل کنار خبر ها باشه\n"
+    "ممنون میشیم شما هم حمایت کنید و خبر های کانال رو با آیدی برای گروه ها و مخاطب هاتون بفرست که بتونید در عضوگیری کانال به ما کمک کرده باشید 🙏💐"
+)
+
+
+def send_support_note(state, day_id):
+    """پیام حمایت از کانال (نسخه‌ی u): هر شب یک بار، بعد از شام خبری و قبل از
+    «شب بخیر»؛ بدون پروکسی، فقط @GodNews24 آخر متن. خرابی‌ش هیچ‌وقت ارسال
+    خبرها رو خراب نمی‌کنه."""
+    dg = state.get("digests") or {}
+    if dg.get("day") != day_id:
+        dg = {"day": day_id, "morning": False, "dinner": False, "support": False}
+        state["digests"] = dg
+    if dg.get("support"):
+        return False
+    text = "\n\n".join(x for x in (html.escape(SUPPORT_TEXT), CHANNEL) if x)
+    try:
+        if tg("sendMessage", text=text, disable_web_page_preview="true"):
+            dg["support"] = True
+            state["digests"] = dg
+            count_post(state, "digest")
+            state["last_post"] = time.time()
+            _record_sent_ids()
+            print("support note posted")
+            return True
+    except Exception as ex:
+        print("support note error:", repr(ex))
     return False
 
 
@@ -2531,7 +2562,8 @@ def merge_remote_state(state, remote):
     elif _rdg.get("day") and _rdg.get("day") == _ldg.get("day"):
         state["digests"] = {"day": _ldg["day"],
                             "morning": bool(_ldg.get("morning") or _rdg.get("morning")),
-                            "dinner": bool(_ldg.get("dinner") or _rdg.get("dinner"))}
+                            "dinner": bool(_ldg.get("dinner") or _rdg.get("dinner")),
+                            "support": bool(_ldg.get("support") or _rdg.get("support"))}
     week = {}
     for e in list(state.get("stats_week") or []) + list(remote.get("stats_week") or []):
         if isinstance(e, dict) and e.get("day"):
@@ -2596,7 +2628,7 @@ def run_once():
     stats = day_stats(state, day_id)
     dg = state.get("digests") or {}
     if dg.get("day") != day_id:
-        dg = {"day": day_id, "morning": False, "dinner": False}
+        dg = {"day": day_id, "morning": False, "dinner": False, "support": False}
         state["digests"] = dg
 
     only_night = False
@@ -2787,6 +2819,16 @@ def run_once():
                     save_state(state)
             except Exception as ex:
                 print("dinner digest error:", repr(ex))
+
+        # پیام حمایت (نسخه‌ی u): بعد از شام خبری و قبل از شب بخیر؛ هر شب یک
+        # بار. شرطش مثل شام خبریه: در همان دوری که شب بخیر فرستاده می‌شه (یا
+        # اجرای دیرهنگام only_night)؛ اگه شام خالی بود هم می‌ره.
+        if not dg.get("support") and (post or only_night):
+            try:
+                if send_support_note(state, day_id):
+                    save_state(state)
+            except Exception as ex:
+                print("support note error:", repr(ex))
 
         for kind, p in post:
             LAST_TG_ERROR[0] = ""
