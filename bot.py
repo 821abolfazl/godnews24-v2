@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.05"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.06"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -593,6 +593,11 @@ def _completeness(item):
     return len(item.get("summary") or "")
 
 
+def _is_tg_item(item):
+    """خبر از کانال تلگرامی اومده؟ (آیدی خبرهای تلگرامی با tg: شروع می‌شه)"""
+    return str(item.get("id", "")).startswith("tg:")
+
+
 def resolve_title_dupes(items, seen):
     """چک سوم تکراری‌ها (نسخه‌ی 0.05): اگه دو خبر تیتر یکسان داشتن، فقط کامل‌ترین نسخه می‌مونه؛
     کوتاه‌ترها دیده‌شده حساب می‌شن تا دور بعد برنگردن. لیست قیمت (kind) شامل این چک نمی‌شه."""
@@ -612,6 +617,8 @@ def resolve_title_dupes(items, seen):
     for it in items:
         if id(it) in drop_ids:
             seen[it["id"]] = None
+            if _is_tg_item(it):
+                log_rejected(it.get("src") or "?", "تکراری (تیتر یکسان)", it["title"])
             print("duplicate title dropped (shorter):", it["title"][:50])
     return [it for it in items if id(it) not in drop_ids]
 
@@ -2785,11 +2792,15 @@ def choose(cands, limit, seen, recent_sets, kept_sets, recent_titles=None):
         th = 0.9 if item.get("kind") else 0.5   # لیست قیمتِ تغییرکرده تکراری حساب نمی‌شه
         if is_dup(tok, recent_sets, th) or is_dup(tok, kept_sets, th):
             seen[item["id"]] = None
+            if _is_tg_item(item):
+                log_rejected(item.get("src") or "?", "تکراری", item["title"])
             print("duplicate skipped:", item["title"][:50])
             continue
         nt = norm_title(item.get("title", ""))
         if not item.get("kind") and nt and nt in recent_titles:
             seen[item["id"]] = None
+            if _is_tg_item(item):
+                log_rejected(item.get("src") or "?", "تکراری (تیتر یکسان)", item["title"])
             print("duplicate title skipped:", item["title"][:50])
             continue
         if len(final) >= limit:
