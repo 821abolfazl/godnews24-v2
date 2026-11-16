@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-v"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-w"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -387,7 +387,7 @@ CATEGORY_ALIASES = {
     "اقتصادی": "economic", "economic": "economic", "economy": "economic", "🟡": "economic",
     "ورزشی": "sport", "sport": "sport", "sports": "sport", "⚽": "sport",
 }
-CATEGORY_NAMES = {"political": "سیاسی", "economic": "اقتصادی", "sport": "ورزشی"}
+CATEGORY_NAMES = {"political": "سیاسی", "economic": "اقتصادی", "sport": "ورزشی", "general": "عمومی"}
 
 
 def is_car_post(head, full):
@@ -1431,19 +1431,23 @@ def day_stats(state, day_id):
                 state["prev_top"] = list(state.get("today_top") or [])[-50:]
             state["today_top"] = []
             state["today_top_day"] = day_id
-        st = {"day": day_id, "posted": 0, "src": {}, "ads": 0, "rejected": 0, "runs": 0, "errors": 0, "first": None}
+        st = {"day": day_id, "posted": 0, "src": {}, "src_cat": {}, "ads": 0, "rejected": 0, "runs": 0, "errors": 0, "first": None}
         state["stats"] = st
     st.setdefault("rejected", 0)
     return st
 
 
-def count_post(state, src):
+def count_post(state, src, cat=None):
     st = state.get("stats")
     if st is None:
         return
     st["posted"] = st.get("posted", 0) + 1
     d = st.setdefault("src", {})
     d[src] = d.get(src, 0) + 1
+    if cat:
+        dc = st.setdefault("src_cat", {})
+        per = dc.setdefault(src, {})
+        per[cat] = per.get(cat, 0) + 1
 
 
 def build_report(state, ks, day_id):
@@ -1453,6 +1457,10 @@ def build_report(state, ks, day_id):
     lines = [f"📊 گزارش روز {day_id} — GodNews24", f"✅ پست ارسال‌شده: {st.get('posted', 0)}"]
     if src:
         lines.append("   " + " | ".join(f"{k}: {v}" for k, v in sorted(src.items(), key=lambda x: -x[1])))
+    _br = category_breakdown_lines(st.get("src_cat") or {})
+    if _br:
+        lines.append("📊 تفکیک دسته‌ها:")
+        lines.extend(_br)
     lines += [f"🛡 پست‌های ردشده: {st.get('rejected', st.get('ads', 0))}",
               f"📰 کیوسک: صبح بخیر {ok(ks.get('morning'))} | نگاه گذرا {ok(ks.get('summary'))} | شب بخیر {ok(ks.get('night'))}",
               f"🔁 تعداد اجراها: {st.get('runs', 0)} | شروع امروز: {st.get('first') or '—'}",
@@ -1497,6 +1505,14 @@ def status_text(state):
         f"({state.get('proxy_total', '—')} در فایل)",
         f"حالت حلقه: {'روشن' if LOOP_MINUTES > 0 else 'خاموش'}",
     ]
+    _br = category_breakdown_lines(st.get("src_cat") or {})
+    if _br:
+        _idx = next((i for i, l in enumerate(lines) if l.startswith("پست امروز از هر منبع:")), None)
+        _block = ["📊 تفکیک دسته‌ها:"] + _br
+        if _idx is None:
+            lines.extend(_block)
+        else:
+            lines[_idx + 1:_idx + 1] = _block
     _dg = state.get("digests") or {}
     _dg_day = (tehran_now() - timedelta(hours=8)).strftime("%Y-%m-%d")
     if _dg.get("day") == _dg_day:
@@ -1698,6 +1714,32 @@ def muted_category_of(state, item):
                 if item_is_category(item, cat):
                     return cat
     return None
+
+# ترتیب دسته‌ها برای آمار (نسخه‌ی w): سیاسی اول، بعد اقتصادی، بعد ورزشی، بقیه عمومی.
+CAT_ORDER = ["political", "economic", "sport", "general"]
+CAT_EMOJI = {"political": "🔴", "economic": "🟡", "sport": "⚽", "general": "🔵"}
+
+def item_main_category(item):
+    """دسته‌ی اصلی خبر برای آمار: سیاسی اول، بعد اقتصادی، بعد ورزشی، بقیه عمومی.
+    (یه خبر می‌تونه هم‌زمان سیاسی و اقتصادی باشه؛ برای شمارش فقط یک دسته می‌گیره.)"""
+    if item_is_category(item, "political"):
+        return "political"
+    if item_is_category(item, "economic"):
+        return "economic"
+    if item_is_category(item, "sport"):
+        return "sport"
+    return "general"
+
+def category_breakdown_lines(src_cat):
+    """خط‌های تفکیک دسته‌ها برای هر منبع: «منبع: 🔴 سیاسی ۱۲ | 🟡 اقتصادی ۸ | ...»؛
+    فقط دسته‌های با حداقل یک پست؛ منبعی که داده‌ی دسته نداره (مثلاً کیوسک) نمیاد."""
+    lines = []
+    for src in sorted(src_cat, key=lambda s: -sum(src_cat[s].values())):
+        per = src_cat[src]
+        parts = [f"{CAT_EMOJI[c]} {CATEGORY_NAMES.get(c, c)} {per[c]}" for c in CAT_ORDER if per.get(c)]
+        if parts:
+            lines.append(f"{src}: " + " | ".join(parts))
+    return lines
 
 def _send_admin_text(text):
     return admin_send(text)
@@ -2895,7 +2937,7 @@ def run_once():
             LAST_TG_ERROR[0] = ""
             if send(item):
                 state["last_post"] = time.time()
-                count_post(state, item.get("src", "?"))
+                count_post(state, item.get("src", "?"), item_main_category(item))
                 record_top(state, item, day_id)   # برای صبحانه/شام خبری (لیست قیمت ثبت نمی‌شه)
                 seen[item["id"]] = None
                 recent.append({"t": time.time(), "k": sorted(item["tok"])})
