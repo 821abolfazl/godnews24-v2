@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.04"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.05"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -444,11 +444,11 @@ def decide(item):
         return "🚙", MARKER["🟡"]
     if PLANE_RE.search(" ".join(title.split()[:6])) or _dyn_match("plane", head):
         return "✈️", MARKER[cls]
-    if DRUG_RE.search(head):
+    if DRUG_RE.search(head) or _dyn_match("drug", head):
         return "💊", MARKER[cls]
     if is_football(head, item["category"]) or _dyn_match("football", head):
         return "⚽", MARKER["🔵"]
-    # دسته‌های ایموجی جدید (نسخه‌های 0.02 و 0.03): کلمه‌های زیر هر ایموجی خبر رو
+    # دسته‌های ایموجی جدید (نسخه‌های 0.02، 0.03 و 0.05): کلمه‌های زیر هر ایموجی خبر رو
     # با همون ایموجی می‌فرستن؛ مثل بقیه‌ی ایموجی‌های موضوعی، قبل از 🔴/🟡 چک می‌شن.
     if _dyn_match("tech", head):
         return "🤖", MARKER["🔵"]
@@ -472,6 +472,10 @@ def decide(item):
         return "⛽️", MARKER["🔵"]
     if _dyn_match("sheep", head):
         return "🐑", MARKER["🔵"]
+    if _dyn_match("motorcycle", head):
+        return "🏍️", MARKER["🔵"]
+    if _dyn_match("newspaper", head):
+        return "📰", MARKER["🔵"]
     # شخص‌ها و کلمه‌های 🔴: هر کدوم که توی تیتر/بند اول زودتر اومده
     cands = []
     for prx, code in PERSON_FLAGS:
@@ -575,6 +579,41 @@ def is_dup(tok, others, th=0.5):
         if union and len(tok & o) / union >= th:
             return True
     return False
+
+
+def norm_title(title):
+    """تیتر یکدست‌شده برای چک سوم تکراری‌ها (نسخه‌ی 0.05): ی/ک عربی، نقطه‌گذاری و فاصله‌های اضافه حذف می‌شن."""
+    t = (title or "").replace("ي", "ی").replace("ك", "ک")
+    t = re.sub(r"[^\w\s]", " ", t)
+    return " ".join(t.split())
+
+
+def _completeness(item):
+    """کامل‌تر بودن یه خبر = خلاصه‌ی بلندتر (جزئیات بیشتر)."""
+    return len(item.get("summary") or "")
+
+
+def resolve_title_dupes(items, seen):
+    """چک سوم تکراری‌ها (نسخه‌ی 0.05): اگه دو خبر تیتر یکسان داشتن، فقط کامل‌ترین نسخه می‌مونه؛
+    کوتاه‌ترها دیده‌شده حساب می‌شن تا دور بعد برنگردن. لیست قیمت (kind) شامل این چک نمی‌شه."""
+    best = {}
+    for it in items:
+        if it.get("kind"):
+            continue
+        nt = norm_title(it.get("title", ""))
+        if not nt:
+            continue
+        cur = best.get(nt)
+        if cur is None or _completeness(it) > _completeness(cur):
+            best[nt] = it
+    drop_ids = {id(it) for it in items
+                if not it.get("kind") and norm_title(it.get("title", ""))
+                and best.get(norm_title(it.get("title", ""))) is not it}
+    for it in items:
+        if id(it) in drop_ids:
+            seen[it["id"]] = None
+            print("duplicate title dropped (shorter):", it["title"][:50])
+    return [it for it in items if id(it) not in drop_ids]
 
 
 # ====== دریافت خبر ======
@@ -1174,15 +1213,16 @@ def prepare_proxies(max_checks=300):
 
 
 # ====== فایل قوانین قابل ویرایش (rules.txt) ======
-RULES_SECTIONS = {"[ممنوع]": "blocked", "[blocked]": "blocked", "[🔴]": "red", "[red]": "red", "[🟡]": "yellow", "[yellow]": "yellow", "[🔵]": "blue", "[blue]": "blue", "[⚽]": "football", "[football]": "football", "[🤖]": "tech", "[tech]": "tech", "[✈]": "plane", "[plane]": "plane", "[🚙]": "car", "[car]": "car", "[🥩]": "meat", "[meat]": "meat", "[🍗]": "chicken", "[chicken]": "chicken", "[🚨]": "alert", "[alert]": "alert", "[🔥]": "hot", "[hot]": "hot", "[🏀]": "basketball", "[basketball]": "basketball", "[🏐]": "volleyball", "[volleyball]": "volleyball", "[🎮]": "game", "[game]": "game", "[🛩]": "jet", "[jet]": "jet", "[⛽]": "fuel", "[fuel]": "fuel", "[🏘]": "housing", "[housing]": "housing", "[🐑]": "sheep", "[sheep]": "sheep", "[پاک شود از آخر متن]": "strip_end", "[strip_end]": "strip_end"}
-RULES_SECTION_TITLES = {"blocked": "[ممنوع]", "red": "[🔴]", "yellow": "[🟡]", "blue": "[🔵]", "football": "[⚽]", "tech": "[🤖]", "plane": "[✈️]", "car": "[🚙]", "meat": "[🥩]", "chicken": "[🍗]", "alert": "[🚨]", "hot": "[🔥]", "basketball": "[🏀]", "volleyball": "[🏐]", "game": "[🎮]", "jet": "[🛩]", "fuel": "[⛽️]", "housing": "[🏘️]", "sheep": "[🐑]", "strip_end": "[پاک شود از آخر متن]"}
+RULES_SECTIONS = {"[ممنوع]": "blocked", "[blocked]": "blocked", "[🔴]": "red", "[red]": "red", "[🟡]": "yellow", "[yellow]": "yellow", "[🔵]": "blue", "[blue]": "blue", "[⚽]": "football", "[football]": "football", "[🤖]": "tech", "[tech]": "tech", "[✈]": "plane", "[plane]": "plane", "[🚙]": "car", "[car]": "car", "[🥩]": "meat", "[meat]": "meat", "[🍗]": "chicken", "[chicken]": "chicken", "[🚨]": "alert", "[alert]": "alert", "[🔥]": "hot", "[hot]": "hot", "[🏀]": "basketball", "[basketball]": "basketball", "[🏐]": "volleyball", "[volleyball]": "volleyball", "[🎮]": "game", "[game]": "game", "[🛩]": "jet", "[jet]": "jet", "[⛽]": "fuel", "[fuel]": "fuel", "[🏘]": "housing", "[housing]": "housing", "[🐑]": "sheep", "[sheep]": "sheep", "[🏍]": "motorcycle", "[motorcycle]": "motorcycle", "[📰]": "newspaper", "[newspaper]": "newspaper", "[💊]": "drug", "[drug]": "drug", "[پاک شود از آخر متن]": "strip_end", "[strip_end]": "strip_end"}
+RULES_SECTION_TITLES = {"blocked": "[ممنوع]", "red": "[🔴]", "yellow": "[🟡]", "blue": "[🔵]", "football": "[⚽]", "tech": "[🤖]", "plane": "[✈️]", "car": "[🚙]", "meat": "[🥩]", "chicken": "[🍗]", "alert": "[🚨]", "hot": "[🔥]", "basketball": "[🏀]", "volleyball": "[🏐]", "game": "[🎮]", "jet": "[🛩]", "fuel": "[⛽️]", "housing": "[🏘️]", "sheep": "[🐑]", "motorcycle": "[🏍️]", "newspaper": "[📰]", "drug": "[💊]", "strip_end": "[پاک شود از آخر متن]"}
 # ایموجی ← کلید دسته (برای /add و /remove)؛ تلگرام بعضی ایموجی‌ها رو با
 # کاراکتر انتخابگر U+FE0F می‌فرسته (مثلاً ✈️)، پس موقع مقایسه اون کاراکتر حذف می‌شه.
 EMOJI_CATEGORY_KEYS = {"🔴": "red", "🟡": "yellow", "🔵": "blue", "⚽": "football",
                       "🤖": "tech", "✈": "plane", "🚙": "car", "🥩": "meat", "🍗": "chicken",
                       "🚨": "alert", "🔥": "hot", "🏀": "basketball", "🏐": "volleyball",
-                      "🎮": "game", "🛩": "jet", "⛽": "fuel", "🏘": "housing", "🐑": "sheep"}
-EMOJI_LIST_STR = "🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|🏐|🎮|🛩|⛽️|🏘️|🐑"
+                      "🎮": "game", "🛩": "jet", "⛽": "fuel", "🏘": "housing", "🐑": "sheep",
+                      "🏍": "motorcycle", "📰": "newspaper", "💊": "drug"}
+EMOJI_LIST_STR = "🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|🏐|🎮|🛩|⛽️|🏘️|🐑|🏍️|📰|💊"
 
 def _norm_emoji(tok):
     return (tok or "").replace("\uFE0F", "")
@@ -1191,7 +1231,8 @@ def parse_rules_text(text):
     out = {"blocked": [], "red": [], "yellow": [], "blue": [], "football": [], "tech": [],
            "plane": [], "car": [], "meat": [], "chicken": [], "alert": [], "hot": [],
            "basketball": [], "volleyball": [], "game": [], "jet": [], "fuel": [],
-           "housing": [], "sheep": [], "strip_end": []}
+           "housing": [], "sheep": [], "motorcycle": [], "newspaper": [], "drug": [],
+           "strip_end": []}
     cur = None
     for raw in (text or "").splitlines():
         line = raw.strip()
@@ -1254,7 +1295,7 @@ def load_rules():
 def format_rules_text(rules=None):
     rules = rules or DYNAMIC_RULES
     lines = []
-    for key in ("blocked", "red", "yellow", "blue", "football", "tech", "plane", "car", "meat", "chicken", "alert", "hot", "basketball", "volleyball", "game", "jet", "fuel", "housing", "sheep", "strip_end"):
+    for key in ("blocked", "red", "yellow", "blue", "football", "tech", "plane", "car", "meat", "chicken", "alert", "hot", "basketball", "volleyball", "game", "jet", "fuel", "housing", "sheep", "motorcycle", "newspaper", "drug", "strip_end"):
         lines.append(RULES_SECTION_TITLES[key])
         for w in rules.get(key, []):
             lines.append(w)
@@ -1637,7 +1678,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/send متن یا عکس ← ارسال خبر دلخواه (متن یا عکس/ویدیو) به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع [دسته] ← بی‌صدا کردن موقت یک منبع یا فقط یک دسته از آن (سیاسی، اقتصادی، ورزشی)\n/unmute منبع [دسته] ← برگردوندن منبع یا یک دسته\n/muted ← لیست منبع‌ها و دسته‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
-             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|🏐|🎮|🛩|⛽️|🏘️|🐑 کلمه ← اضافه کردن کلمه به ایموجی\n/remove ایموجی کلمه ← حذف کلمه از ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
+             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|🏐|🎮|🛩|⛽️|🏘️|🐑|🏍️|📰|💊 کلمه ← اضافه کردن کلمه به ایموجی\n/remove ایموجی کلمه ← حذف کلمه از ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
 
 
 # ====== منوی دکمه‌ای (ReplyKeyboard) در چت خصوصی ادمین ======
@@ -1672,8 +1713,8 @@ MENU_PROMPTS = {
     "/mute": chr(10).join(["اسم منبع رو بفرست (مثلاً AloNews).", "برای بی‌صدا کردن فقط یه دسته، «منبع دسته» بفرست (مثلاً euronews سیاسی).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/unmute": chr(10).join(["اسم منبعی که می‌خوای برگرده رو بفرست (مثلاً AloNews).", "برای برگردوندن فقط یه دسته، «منبع دسته» بفرست (مثلاً euronews سیاسی).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/block": chr(10).join(["کلمه‌ی ممنوع رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
-    "/add": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗🚨🔥🏀🏐🎮🛩⛽️🏘️🐑)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
-    "/remove": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗🚨🔥🏀🏐🎮🛩⛽️🏘️🐑)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/add": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗🚨🔥🏀🏐🎮🛩⛽️🏘️🐑🏍️📰💊)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/remove": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗🚨🔥🏀🏐🎮🛩⛽️🏘️🐑🏍️📰💊)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/strip": chr(10).join(["عبارت پاک‌شونده رو بفرست (مثلاً / ایسنا).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/unstrip": chr(10).join(["عبارتی که می‌خوای از پاک‌شونده‌ها حذف بشه رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
 }
@@ -1781,11 +1822,15 @@ def category_breakdown_lines(src_cat, src=None):
     جمع کل میاد. دلیل فرمت خط‌به‌خط: توی یه خط، اسم لاتین منبع با ایموجی و
     کلمه‌ی فارسی و عدد لاتین قاطی می‌شد و تلگرام ایموجی و عدد رو جابه‌جا نشون
     می‌داد؛ هر خط حالا یه پاراگراف فارسیه و سر جاش می‌مونه. فقط دسته‌های با
-    حداقل یک پست؛ منابع به ترتیب جمع کل، نزولی."""
+    حداقل یک پست؛ منابع به ترتیب جمع کل، نزولی — به‌جز کیوسک و digest که
+    (نسخه‌ی 0.05) همیشه آخر بلوک میان، کیوسک درست قبل از digest."""
     src = src or {}
     lines = []
-    for name in sorted(set(src) | set(src_cat),
-                       key=lambda s: -(src.get(s, 0) or sum(src_cat.get(s, {}).values()))):
+    names = sorted(set(src) | set(src_cat),
+                   key=lambda s: -(src.get(s, 0) or sum(src_cat.get(s, {}).values())))
+    names = [n for n in names if n not in ("kiosk", "digest")]
+    names += [n for n in ("kiosk", "digest") if n in set(src) | set(src_cat)]
+    for name in names:
         per = src_cat.get(name, {})
         total = src.get(name, 0) or sum(per.values())
         parts = [f"{CAT_EMOJI[c]} {CATEGORY_NAMES.get(c, c)} {fa_num(per[c])}" for c in CAT_ORDER if per.get(c)]
@@ -1872,7 +1917,7 @@ def handle_command(state, cmd, full_text=""):
     elif cmd == "/rules":
         r = DYNAMIC_RULES
         lines = ["📜 قوانین فعلی (rules.txt):"]
-        for key, label in (("blocked", "ممنوع"), ("red", "🔴"), ("yellow", "🟡"), ("blue", "🔵"), ("football", "⚽"), ("tech", "🤖"), ("plane", "✈️"), ("car", "🚙"), ("meat", "🥩"), ("chicken", "🍗"), ("alert", "🚨"), ("hot", "🔥"), ("basketball", "🏀"), ("volleyball", "🏐"), ("game", "🎮"), ("jet", "🛩"), ("fuel", "⛽️"), ("housing", "🏘️"), ("sheep", "🐑"), ("strip_end", "پاک شود از آخر متن")):
+        for key, label in (("blocked", "ممنوع"), ("red", "🔴"), ("yellow", "🟡"), ("blue", "🔵"), ("football", "⚽"), ("tech", "🤖"), ("plane", "✈️"), ("car", "🚙"), ("meat", "🥩"), ("chicken", "🍗"), ("alert", "🚨"), ("hot", "🔥"), ("basketball", "🏀"), ("volleyball", "🏐"), ("game", "🎮"), ("jet", "🛩"), ("fuel", "⛽️"), ("housing", "🏘️"), ("sheep", "🐑"), ("motorcycle", "🏍️"), ("newspaper", "📰"), ("drug", "💊"), ("strip_end", "پاک شود از آخر متن")):
             words = r.get(key, [])
             lines.append(f"{label} ({len(words)}): " + ("، ".join(words) if words else "—"))
         admin_send("\n".join(lines))
@@ -2730,15 +2775,22 @@ def collect(feeds, seen, seeded, seed_n, state=None):
     return list(cands.values())
 
 
-def choose(cands, limit, seen, recent_sets, kept_sets):
+def choose(cands, limit, seen, recent_sets, kept_sets, recent_titles=None):
     """جدیدترین خبرهای غیرتکراری رو تا سقف limit انتخاب می‌کنه."""
     final = []
+    if recent_titles is None:
+        recent_titles = set()
     for item in sorted(cands, key=lambda x: -x["ts"]):
         tok = tokens_of(item)
         th = 0.9 if item.get("kind") else 0.5   # لیست قیمتِ تغییرکرده تکراری حساب نمی‌شه
         if is_dup(tok, recent_sets, th) or is_dup(tok, kept_sets, th):
             seen[item["id"]] = None
             print("duplicate skipped:", item["title"][:50])
+            continue
+        nt = norm_title(item.get("title", ""))
+        if not item.get("kind") and nt and nt in recent_titles:
+            seen[item["id"]] = None
+            print("duplicate title skipped:", item["title"][:50])
             continue
         if len(final) >= limit:
             # صف کهنه نشه: خبر قدیمیِ جا‌مونده دور ریخته می‌شه
@@ -2934,6 +2986,7 @@ def run_once():
     seeded = set(state["seeded"])
     recent = [t for t in state["titles"] if now - t["t"] < DEDUP_HOURS * 3600]
     recent_sets = [set(t["k"]) for t in recent]
+    recent_titles = {t.get("ti") for t in recent if t.get("ti")}
     kept_sets, to_post = [], []
 
     # ---- کیوسک خبر: فقط پیام‌های مشخص
@@ -2980,7 +3033,7 @@ def run_once():
     if run_tg:
         cands = collect(tg_feeds, seen, seeded, seed_n=TG_MAX_POSTS, state=state)
         n = random.randint(TG_MIN_POSTS, TG_MAX_POSTS)
-        chosen = choose(cands, n, seen, recent_sets, kept_sets)
+        chosen = choose(cands, n, seen, recent_sets, kept_sets, recent_titles)
         print(f"کانال‌های تلگرامی: {len(cands)} خبر تازه، {len(chosen)} تا انتخاب شد (سقف {n})")
         _examined = sum(READ_STATUS.values()) + len(cands)
         _blocked_n = sum(1 for e in (state.get("rejected") or []) if e.get("day") == rejected_day() and e.get("why") == "کلمه‌ی ممنوع")
@@ -3015,7 +3068,7 @@ def run_once():
             if i not in keep_dom:
                 seen[i["id"]] = None
         pool = [i for i in cands if not i["domestic"]] + keep_dom
-        chosen = choose(pool, OTHER_MAX_POSTS, seen, recent_sets, kept_sets)
+        chosen = choose(pool, OTHER_MAX_POSTS, seen, recent_sets, kept_sets, recent_titles)
         print(f"بقیه‌ی منابع: {len(pool)} خبر تازه، {len(chosen)} تا انتخاب شد")
         to_post += chosen
         state["last_other"] = now
@@ -3039,6 +3092,8 @@ def run_once():
                 log_rejected("kiosk", f"خطا در ارسال ({kind})", p.get("text", ""), p.get("post_id"), LAST_TG_ERROR[0])
             time.sleep(3)
 
+        to_post = resolve_title_dupes(to_post, seen)
+
         for item in sorted(to_post, key=lambda x: x["ts"]):
             if time.time() - started > RUN_BUDGET_SEC:
                 print("زمان این اجرا تموم شد؛ بقیه‌ی خبرها نوبت بعد.")
@@ -3049,7 +3104,7 @@ def run_once():
                 count_post(state, item.get("src", "?"), item_main_category(item))
                 record_top(state, item, day_id)   # برای شام خبری (لیست قیمت ثبت نمی‌شه)
                 seen[item["id"]] = None
-                recent.append({"t": time.time(), "k": sorted(item["tok"])})
+                recent.append({"t": time.time(), "k": sorted(item["tok"]), "ti": norm_title(item["title"])})
                 state["seen"] = list(seen)
                 state["titles"] = recent[-400:]
                 save_state(state)
