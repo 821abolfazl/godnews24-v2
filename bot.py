@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-u"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-v"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -379,6 +379,15 @@ POLITICAL_RE = rx(r"رئیس[\s\u200c]*جمهور", "مذاکره", "مذاکر�
                   "ارتش", "ناتو", "مجلس", "کنگره", "پارلمان", "سفیر", "دیپلمات", r"آتش[\s\u200c]*بس", "وزیر",
                   r"نخست[\s\u200c]*وزیر", "پدافند", "اعدام", "بازداشت")
 POLITICAL_SKIP_CHANNELS = {"arz_talaaa"}   # این کانال‌ها خبر سیاسی نمی‌دن
+
+# دسته‌هایی که می‌شه جدا جدا از یک منبع بی‌صدا کرد (نسخه‌ی v؛ مثلاً فقط خبر
+# سیاسی یورونیوز). کلید داخلی دسته، و مقدارها هم‌معنی‌های فارسی/انگلیسی/ایموجی‌ان.
+CATEGORY_ALIASES = {
+    "سیاسی": "political", "political": "political", "politics": "political", "🔴": "political",
+    "اقتصادی": "economic", "economic": "economic", "economy": "economic", "🟡": "economic",
+    "ورزشی": "sport", "sport": "sport", "sports": "sport", "⚽": "sport",
+}
+CATEGORY_NAMES = {"political": "سیاسی", "economic": "اقتصادی", "sport": "ورزشی"}
 
 
 def is_car_post(head, full):
@@ -1496,6 +1505,13 @@ def status_text(state):
         lines.append("🍳 صبحانه: — | 🍽️ شام: — | 💌 حمایت: —")
     if muted:
         lines.append(f"🔇 منبع‌های بی‌صدا: {', '.join(muted)}")
+    _mc = state.get("muted_categories") or {}
+    if _mc:
+        _cat_lines = []
+        for _k in sorted(_mc):
+            _names = "، ".join(CATEGORY_NAMES.get(c, c) for c in sorted(_mc[_k]))
+            _cat_lines.append(f"{_k}: {_names}")
+        lines.append("🔇 دسته‌های بی‌صدا: " + "؛ ".join(_cat_lines))
     return "\n".join(lines)
 
 def stats_text(state):
@@ -1568,7 +1584,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/errors ← پست‌هایی که امروز ارسالشون خطا داد\n"
              "/test ← بررسی دسترسی ربات به کانال و نمونه‌ی قالب پست\n"
              "/send متن یا عکس ← ارسال خبر دلخواه (متن یا عکس/ویدیو) به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
-             "/mute منبع ← بی‌صدا کردن موقت یک منبع\n/unmute منبع ← برگردوندن منبع\n/muted ← لیست منبع‌های بی‌صدا\n"
+             "/mute منبع [دسته] ← بی‌صدا کردن موقت یک منبع یا فقط یک دسته از آن (سیاسی، اقتصادی، ورزشی)\n/unmute منبع [دسته] ← برگردوندن منبع یا یک دسته\n/muted ← لیست منبع‌ها و دسته‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
              "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
 
@@ -1601,8 +1617,8 @@ MENU_TEXT_TO_CMD = {label: cmd for label, cmd in MENU_BUTTONS}
 # (chr(10) یعنی خط جدید؛ برای اینکه تو متن سورس بک‌اسلش-n ننویسیم.)
 MENU_PROMPTS = {
     "/send": chr(10).join(["متن یا عکس/ویدیوی خبر رو بفرست تا به کانال بفرستم.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
-    "/mute": chr(10).join(["اسم منبع رو بفرست (مثلاً AloNews).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
-    "/unmute": chr(10).join(["اسم منبعی که می‌خوای برگرده رو بفرست (مثلاً AloNews).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/mute": chr(10).join(["اسم منبع رو بفرست (مثلاً AloNews).", "برای بی‌صدا کردن فقط یه دسته، «منبع دسته» بفرست (مثلاً euronews سیاسی).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/unmute": chr(10).join(["اسم منبعی که می‌خوای برگرده رو بفرست (مثلاً AloNews).", "برای برگردوندن فقط یه دسته، «منبع دسته» بفرست (مثلاً euronews سیاسی).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/block": chr(10).join(["کلمه‌ی ممنوع رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/add": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/strip": chr(10).join(["عبارت پاک‌شونده رو بفرست (مثلاً / ایسنا).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
@@ -1646,6 +1662,42 @@ def source_muted_key(state, url):
         if m in low:
             return True
     return False
+
+def item_is_category(item, cat):
+    """خبر item توی دسته‌ی cat هست یا نه؛ با همون آشکارسازهایی که ایموجی اول
+    پست رو تعیین می‌کنن (pick_emoji) + همون تشخیص سیاسیِ قانون ارز و طلا."""
+    title = item.get("title") or ""
+    paras = item.get("paras") or []
+    head = title + " " + (paras[0] if paras else "")
+    feed_cat = item.get("category")
+    if cat == "political":
+        return feed_cat == "politics" or is_political(head)
+    if cat == "economic":
+        if item.get("kind"):
+            return True   # لیست قیمت (ماشین/طلا/ارز) ذاتاً اقتصادیه
+        if feed_cat == "economy":
+            return True
+        econ_title = re.sub(r"ارز(?=ان|ش|ی|ن)", "", title)
+        return any(k in econ_title for k in ECON_KW)
+    if cat == "sport":
+        return feed_cat == "sports" or any(k in title for k in SPORT_KW) or is_football(head, feed_cat)
+    return False
+
+def muted_category_of(state, item):
+    """اگه خبر item توی یه دسته‌ی بی‌صداشده از منبع خودش باشه، کلید اون دسته
+    رو برمی‌گردونه؛ وگرنه None. منبع تلگرامی با اسم کانال و RSS با دامنه
+    تطبیق داده می‌شه (مثل source_muted_key)."""
+    mc = state.get("muted_categories") or {}
+    if not mc:
+        return None
+    src = (item.get("src") or "").lower()
+    for key, cats in mc.items():
+        k = (key or "").lower()
+        if k and (k in src or src == k):
+            for cat in cats or []:
+                if item_is_category(item, cat):
+                    return cat
+    return None
 
 def _send_admin_text(text):
     return admin_send(text)
@@ -1847,28 +1899,75 @@ def handle_command(state, cmd, full_text=""):
         except Exception:
             pass
     elif cmd == "/mute":
-        key = normalize_source(arg)
+        _parts = (arg or "").split()
+        key = normalize_source(_parts[0]) if _parts else ""
         canon = SOURCE_ALIASES.get(key, key)
         if not key:
-            admin_send("منبع را هم بگو. مثال: /mute AloNews")
-        elif canon in [normalize_source(x) for x in (state.get("muted_sources") or [])]:
+            admin_send("منبع را هم بگو. مثال: /mute AloNews یا /mute euronews سیاسی")
+        elif len(_parts) >= 2:
+            _cat = CATEGORY_ALIASES.get(_parts[1])
+            if not _cat:
+                admin_send("دسته را نمی‌شناسم. دسته‌ها: سیاسی، اقتصادی، ورزشی. مثال: /mute euronews سیاسی")
+            elif normalize_source(canon) in [normalize_source(x) for x in (state.get("muted_sources") or [])]:
+                admin_send(f"«{canon}» همین حالا کامل بی‌صداست؛ دسته جدا لازم نیست.")
+            else:
+                _mc = state.setdefault("muted_categories", {})
+                _cats = _mc.setdefault(canon, [])
+                if _cat in _cats:
+                    admin_send(f"دسته‌ی «{CATEGORY_NAMES[_cat]}» از «{canon}» همین حالا هم بی‌صداست.")
+                else:
+                    _cats.append(_cat)
+                    admin_send(f"🔇 دسته‌ی «{CATEGORY_NAMES[_cat]}» از «{canon}» بی‌صدا شد؛ بقیه‌ی خبرهاش میاد.")
+        elif normalize_source(canon) in [normalize_source(x) for x in (state.get("muted_sources") or [])]:
             admin_send(f"«{canon}» همین حالا هم بی‌صداست.")
         else:
             state.setdefault("muted_sources", []).append(canon)
             admin_send(f"🔇 «{canon}» تا /unmute بی‌صدا شد.")
     elif cmd == "/unmute":
-        key = normalize_source(arg)
+        _parts = (arg or "").split()
+        key = normalize_source(_parts[0]) if _parts else ""
         canon = SOURCE_ALIASES.get(key, key)
-        muted = state.get("muted_sources") or []
-        new_muted = [x for x in muted if normalize_source(x) != canon]
-        if len(new_muted) == len(muted):
-            admin_send(f"«{canon}» بی‌صدا نبود.")
+        if len(_parts) >= 2:
+            _cat = CATEGORY_ALIASES.get(_parts[1])
+            if not _cat:
+                admin_send("دسته را نمی‌شناسم. دسته‌ها: سیاسی، اقتصادی، ورزشی. مثال: /unmute euronews سیاسی")
+            else:
+                _mc = state.get("muted_categories") or {}
+                _old = list(_mc.get(canon) or [])
+                _cats = [c for c in _old if c != _cat]
+                if len(_cats) == len(_old):
+                    admin_send(f"دسته‌ی «{CATEGORY_NAMES[_cat]}» از «{canon}» بی‌صدا نبود.")
+                else:
+                    if _cats:
+                        _mc[canon] = _cats
+                    else:
+                        _mc.pop(canon, None)
+                    state["muted_categories"] = _mc
+                    admin_send(f"🔊 دسته‌ی «{CATEGORY_NAMES[_cat]}» از «{canon}» برگشت.")
         else:
-            state["muted_sources"] = new_muted
-            admin_send(f"🔊 «{canon}» برگشت.")
+            muted = state.get("muted_sources") or []
+            new_muted = [x for x in muted if normalize_source(x) != canon]
+            _mc = state.get("muted_categories") or {}
+            _had_cats = canon in _mc
+            if _had_cats:
+                _mc.pop(canon, None)
+                state["muted_categories"] = _mc
+            if len(new_muted) == len(muted) and not _had_cats:
+                admin_send(f"«{canon}» بی‌صدا نبود.")
+            else:
+                state["muted_sources"] = new_muted
+                admin_send(f"🔊 «{canon}» برگشت.")
     elif cmd == "/muted":
         muted = state.get("muted_sources") or []
-        admin_send("🔇 منبع‌های بی‌صدا: " + ("، ".join(muted) if muted else "هیچ‌کدام"))
+        _mc = state.get("muted_categories") or {}
+        _lines = ["🔇 منبع‌های بی‌صدا: " + ("، ".join(muted) if muted else "هیچ‌کدام")]
+        if _mc:
+            _cat_lines = []
+            for _k in sorted(_mc):
+                _names = "، ".join(CATEGORY_NAMES.get(c, c) for c in sorted(_mc[_k]))
+                _cat_lines.append(f"{_k}: {_names}")
+            _lines.append("🔇 دسته‌های بی‌صدا: " + "؛ ".join(_cat_lines))
+        admin_send("\n".join(_lines))
     elif cmd in ("/ads", "/errors", "/skipped"):
         for chunk in rejected_text(state, cmd[1:]):
             admin_send(chunk)
@@ -2451,8 +2550,10 @@ def run_special(kind, p, seen, ks):
     return ok
 
 
-def collect(feeds, seen, seeded, seed_n):
-    """خبرهای تازه‌ی منابع رو جمع می‌کنه. منبع جدید: فقط seed_n خبر آخر، بقیه قدیمی حساب می‌شن."""
+def collect(feeds, seen, seeded, seed_n, state=None):
+    """خبرهای تازه‌ی منابع رو جمع می‌کنه. منبع جدید: فقط seed_n خبر آخر، بقیه قدیمی حساب می‌شن.
+    خبرهایی که دسته‌شون از منبع‌شون بی‌صدا شده (نسخه‌ی v) اینجا رد می‌شن؛
+    مثل بی‌صدا کردن کل منبع، دیده‌شده حساب نمی‌شن تا با برگردوندن دسته دوباره بیان."""
     cands = {}
     for category, url, domestic in feeds:
         items = fetch_feed(category, url, domestic)
@@ -2468,6 +2569,12 @@ def collect(feeds, seen, seeded, seed_n):
             fresh = items
         for i in fresh:
             if i["id"] not in seen:
+                if state is not None:
+                    _mc = muted_category_of(state, i)
+                    if _mc:
+                        print("  category muted, skipped:", i["title"][:40])
+                        log_rejected(i.get("src") or "?", f"دسته‌ی {CATEGORY_NAMES.get(_mc, _mc)} بی‌صداست", i["title"])
+                        continue
                 cands[i["id"]] = i
     return list(cands.values())
 
@@ -2538,6 +2645,10 @@ def merge_remote_state(state, remote):
     for k in ("last_tg", "last_other", "last_post"):
         state[k] = max(state.get(k) or 0, remote.get(k) or 0)
     state["muted_sources"] = list(dict.fromkeys(list(state.get("muted_sources") or []) + list(remote.get("muted_sources") or [])))
+    _rmc, _lmc = remote.get("muted_categories") or {}, state.get("muted_categories") or {}
+    for _k, _v in _rmc.items():
+        _lmc[_k] = sorted(set(_lmc.get(_k) or []) | set(_v or []))
+    state["muted_categories"] = _lmc
     if remote.get("last_post_ids"):
         state["last_post_ids"] = list(dict.fromkeys(list(state.get("last_post_ids") or []) + list(remote.get("last_post_ids") or [])))[-10:]
     # خبرهای مهم روز (برای صبحانه/شام خبری): اگه روزشون فرق داشت، تازه‌تر می‌مونه؛
@@ -2716,7 +2827,7 @@ def run_once():
         print("muted sources skipped:", state.get("muted_sources"))
 
     if run_tg:
-        cands = collect(tg_feeds, seen, seeded, seed_n=TG_MAX_POSTS)
+        cands = collect(tg_feeds, seen, seeded, seed_n=TG_MAX_POSTS, state=state)
         n = random.randint(TG_MIN_POSTS, TG_MAX_POSTS)
         chosen = choose(cands, n, seen, recent_sets, kept_sets)
         print(f"کانال‌های تلگرامی: {len(cands)} خبر تازه، {len(chosen)} تا انتخاب شد (سقف {n})")
@@ -2746,7 +2857,7 @@ def run_once():
                                   "شاید شکل امضای کانال عوض شده.", 12)
 
     if run_other:
-        cands = collect(other_feeds, seen, seeded, seed_n=1)
+        cands = collect(other_feeds, seen, seeded, seed_n=1, state=state)
         dom = sorted([i for i in cands if i["domestic"]], key=lambda x: -x["ts"])
         keep_dom = dom[:MAX_DOMESTIC_PER_RUN] if random.random() < DOMESTIC_CHANCE else []
         for i in dom:
