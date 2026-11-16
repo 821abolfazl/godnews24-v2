@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.03"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.04"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1492,11 +1492,9 @@ def build_report(state, ks, day_id):
     ok = lambda v: "✓" if v else "✗"
     src = st.get("src", {})
     lines = [f"📊 گزارش روز {day_id} — GodNews24", f"✅ پست ارسال‌شده: {st.get('posted', 0)}"]
-    if src:
-        lines.append("   " + " | ".join(f"{k}: {v}" for k, v in sorted(src.items(), key=lambda x: -x[1])))
-    _br = category_breakdown_lines(st.get("src_cat") or {})
+    _br = category_breakdown_lines(st.get("src_cat") or {}, src)
     if _br:
-        lines.append("📊 تفکیک دسته‌ها:")
+        lines.append("📊 پست امروز از هر منبع:")
         lines.extend(_br)
     lines += [f"🛡 پست‌های ردشده: {st.get('rejected', st.get('ads', 0))}",
               f"📰 کیوسک: صبح بخیر {ok(ks.get('morning'))} | صبحانه خبری {ok(ks.get('summary'))} | شب بخیر {ok(ks.get('night'))}",
@@ -1527,7 +1525,6 @@ def fmt_ago(ts):
 def status_text(state):
     st = state.get("stats") or {}
     src = st.get("src", {}) or {}
-    src_line = " | ".join(f"{k}: {v}" for k, v in sorted(src.items(), key=lambda x: -x[1])) if src else "—"
     muted = state.get("muted_sources") or []
     lines = [
         f"🤖 نسخه‌ی ربات: {BOT_VERSION}",
@@ -1537,15 +1534,14 @@ def status_text(state):
         f"آخرین نوبت کانال‌ها: {fmt_ago(state.get('last_tg'))}",
         f"آخرین نوبت بقیه‌ی منابع: {fmt_ago(state.get('last_other'))}",
         f"امروز: {st.get('posted', 0)} پست | {st.get('rejected', st.get('ads', 0))} پست‌های ردشده | {st.get('errors', 0)} خطا",
-        f"پست امروز از هر منبع: {src_line}",
         f"پروکسی سالم (آخرین چک): {state.get('alive_count', '—')} از {state.get('proxy_checked', '—')} بررسی‌شده "
         f"({state.get('proxy_total', '—')} در فایل)",
         f"حالت حلقه: {'روشن' if LOOP_MINUTES > 0 else 'خاموش'}",
     ]
-    _br = category_breakdown_lines(st.get("src_cat") or {})
+    _br = category_breakdown_lines(st.get("src_cat") or {}, src)
     if _br:
-        _idx = next((i for i, l in enumerate(lines) if l.startswith("پست امروز از هر منبع:")), None)
-        _block = ["📊 تفکیک دسته‌ها:"] + _br
+        _idx = next((i for i, l in enumerate(lines) if l.startswith("امروز:")), None)
+        _block = ["📊 پست امروز از هر منبع:"] + _br
         if _idx is None:
             lines.extend(_block)
         else:
@@ -1778,19 +1774,23 @@ def fa_num(n):
     راست‌به‌چپ، رقم لاتین از کلمه‌ی فارسی جدا می‌افته)."""
     return str(n).translate(FA_DIGITS)
 
-def category_breakdown_lines(src_cat):
-    """خط‌های تفکیک دسته‌ها برای هر منبع (نسخه‌ی aa): اسم منبع توی یه خط جدا،
-    بعد هر دسته توی یه خط جدا: «🔴 سیاسی ۳». دلیلش: توی یه خط، اسم لاتین منبع
-    با ایموجی و کلمه‌ی فارسی و عدد لاتین قاطی می‌شد و تلگرام ایموجی و عدد رو
-    جابه‌جا نشون می‌داد؛ هر خط حالا یه پاراگراف فارسیه و سر جاش می‌مونه.
-    فقط دسته‌های با حداقل یک پست؛ منبعی که داده‌ی دسته نداره (مثلاً کیوسک) نمیاد."""
+def category_breakdown_lines(src_cat, src=None):
+    """خط‌های «پست امروز از هر منبع» (نسخه‌ی 0.04: ادغام جمع کل و تفکیک دسته‌ها):
+    سر هر منبع جمع کل پست‌هاش هم هست: «AloNews: ۶۶ پست»، بعد هر دسته توی یه
+    خط جدا: «🔴 سیاسی ۳». منبعی که دسته نداره (مثلاً کیوسک و digest) فقط با
+    جمع کل میاد. دلیل فرمت خط‌به‌خط: توی یه خط، اسم لاتین منبع با ایموجی و
+    کلمه‌ی فارسی و عدد لاتین قاطی می‌شد و تلگرام ایموجی و عدد رو جابه‌جا نشون
+    می‌داد؛ هر خط حالا یه پاراگراف فارسیه و سر جاش می‌مونه. فقط دسته‌های با
+    حداقل یک پست؛ منابع به ترتیب جمع کل، نزولی."""
+    src = src or {}
     lines = []
-    for src in sorted(src_cat, key=lambda s: -sum(src_cat[s].values())):
-        per = src_cat[src]
+    for name in sorted(set(src) | set(src_cat),
+                       key=lambda s: -(src.get(s, 0) or sum(src_cat.get(s, {}).values()))):
+        per = src_cat.get(name, {})
+        total = src.get(name, 0) or sum(per.values())
         parts = [f"{CAT_EMOJI[c]} {CATEGORY_NAMES.get(c, c)} {fa_num(per[c])}" for c in CAT_ORDER if per.get(c)]
-        if parts:
-            lines.append(f"{src}:")
-            lines.extend(parts)
+        lines.append(f"{name}: {fa_num(total)} پست")
+        lines.extend(parts)
     return lines
 
 def _send_admin_text(text):
