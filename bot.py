@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-w"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-x"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -712,8 +712,8 @@ def parse_tg_page(page, allow_media_only=False):
 
 # ====== کیوسک خبر (@kioskkhabar): فقط چند پیام مشخص ======
 KIOSK = "kioskkhabar"
-MORNING_FROM, MORNING_TO = 8 * 60 + 30, 13 * 60   # صبح بخیر و نگاه گذرا: ۰۸:۳۰ تا ۱۳:۰۰ تهران
-SUMMARY_WAIT_UNTIL = 10 * 60                        # نگاه گذرا تا ۱۰:۰۰ منتظر صبح بخیر می‌مونه
+MORNING_FROM, MORNING_TO = 8 * 60 + 30, 13 * 60   # صبح بخیر و صبحانه خبری: ۰۸:۳۰ تا ۱۳:۰۰ تهران
+SUMMARY_WAIT_UNTIL = 10 * 60                        # صبحانه خبری تا ۱۰:۰۰ منتظر صبح بخیر می‌مونه
 NIGHT_FROM, NIGHT_END = 45, 100                     # شب بخیر: ۰۰:۴۵ تا ۰۱:۴۰ تهران
 PAPERS_MAX_AGE_H = 3                                # روزنامه‌ها: فقط تازه‌های ۳ ساعت اخیر
 
@@ -1462,7 +1462,7 @@ def build_report(state, ks, day_id):
         lines.append("📊 تفکیک دسته‌ها:")
         lines.extend(_br)
     lines += [f"🛡 پست‌های ردشده: {st.get('rejected', st.get('ads', 0))}",
-              f"📰 کیوسک: صبح بخیر {ok(ks.get('morning'))} | نگاه گذرا {ok(ks.get('summary'))} | شب بخیر {ok(ks.get('night'))}",
+              f"📰 کیوسک: صبح بخیر {ok(ks.get('morning'))} | صبحانه خبری {ok(ks.get('summary'))} | شب بخیر {ok(ks.get('night'))}",
               f"🔁 تعداد اجراها: {st.get('runs', 0)} | شروع امروز: {st.get('first') or '—'}",
               f"⚠️ خطاها: {st.get('errors', 0)}"]
     if state.get("paused"):
@@ -1515,10 +1515,12 @@ def status_text(state):
             lines[_idx + 1:_idx + 1] = _block
     _dg = state.get("digests") or {}
     _dg_day = (tehran_now() - timedelta(hours=8)).strftime("%Y-%m-%d")
+    _ks = state.get("kiosk") or {}
+    _morning_ok = bool(_ks.get("summary")) and _ks.get("day") == _dg_day   # نسخه‌ی x: صبحانه خبری پست کیوسکه
     if _dg.get("day") == _dg_day:
-        lines.append(f"🍳 صبحانه: {'✅' if _dg.get('morning') else '—'} | 🍽️ شام: {'✅' if _dg.get('dinner') else '—'} | 💌 حمایت: {'✅' if _dg.get('support') else '—'}")
+        lines.append(f"🍳 صبحانه: {'✅' if _morning_ok else '—'} | 🍽️ شام: {'✅' if _dg.get('dinner') else '—'} | 💌 حمایت: {'✅' if _dg.get('support') else '—'}")
     else:
-        lines.append("🍳 صبحانه: — | 🍽️ شام: — | 💌 حمایت: —")
+        lines.append(f"🍳 صبحانه: {'✅' if _morning_ok else '—'} | 🍽️ شام: — | 💌 حمایت: —")
     if muted:
         lines.append(f"🔇 منبع‌های بی‌صدا: {', '.join(muted)}")
     _mc = state.get("muted_categories") or {}
@@ -1602,7 +1604,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/send متن یا عکس ← ارسال خبر دلخواه (متن یا عکس/ویدیو) به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع [دسته] ← بی‌صدا کردن موقت یک منبع یا فقط یک دسته از آن (سیاسی، اقتصادی، ورزشی)\n/unmute منبع [دسته] ← برگردوندن منبع یا یک دسته\n/muted ← لیست منبع‌ها و دسته‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
-             "صبحانه خبری ساعت ۰۹:۰۰ و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
+             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
 
 
 # ====== منوی دکمه‌ای (ReplyKeyboard) در چت خصوصی ادمین ======
@@ -2396,10 +2398,10 @@ def send_special(text, media, proxy):
         PARSE_MODE[0] = "HTML"
 
 
-# ====== خلاصه‌ی صبحانه و شام خبری (نسخه‌ی d؛ قالب نسخه‌ی h) ======
+# ====== خلاصه‌ی شام خبری (نسخه‌ی d؛ قالب نسخه‌ی h؛ صبحانه از نسخه‌ی x پست کیوسکه) ======
 # هر خبر معمولیِ موفق در state["today_top"] ثبت می‌شه (حداکثر ۵۰ تا؛ لیست قیمت
 # و کیوسک ثبت نمی‌شن). با عوض شدن «روز» کانال، today_top به prev_top منتقل می‌شه
-# تا صبحانه خبری بتونه از خبرهای شب قبل هم استفاده کنه.
+# (prev_top از نسخه‌ی x دیگه خوانده نمی‌شه؛ صبحانه خبری پست کیوسکه).
 def record_top(state, item, day_id):
     """خبر معمولیِ تازه‌منتشرشده رو برای خلاصه‌های روز ثبت می‌کنه."""
     try:
@@ -2470,21 +2472,20 @@ def build_digest_text(title, entries):
 
 
 def send_digest(state, kind, day_id, th):
-    """یک خلاصه می‌فرسته (kind: "morning" یا "dinner"). خالی باشه بی‌صدا رد می‌شه
-    و «فرستاده‌شده» علامت نمی‌خوره تا نوبت بعد دوباره امتحان بشه. خرابی‌ش
-    هیچ‌وقت ارسال خبرها رو خراب نمی‌کنه."""
+    """یک خلاصه می‌فرسته (kind: "dinner"؛ "morning" از نسخه‌ی x دیگه اینجا نیست —
+    صبحانه خبری پست کیوسک با عنوان «صبحانه خبری گادنیوز۲۴»ـه). خالی باشه بی‌صدا
+    رد می‌شه و «فرستاده‌شده» علامت نمی‌خوره تا نوبت بعد دوباره امتحان بشه.
+    خرابی‌ش هیچ‌وقت ارسال خبرها رو خراب نمی‌کنه."""
+    if kind == "morning":
+        return False   # نسخه‌ی x: صبحانه خبری از کیوسک میاد، نه از این تابع
     dg = state.get("digests") or {}
     if dg.get("day") != day_id:
         dg = {"day": day_id, "morning": False, "dinner": False, "support": False}
         state["digests"] = dg
     if dg.get(kind):
         return False
-    if kind == "morning":
-        entries = list(state.get("prev_top") or []) + list(state.get("today_top") or [])
-        title = "🍳 صبحانه خبری گادنیوز ۲۴"
-    else:
-        entries = list(state.get("today_top") or [])
-        title = "🍽️ شام خبری گادنیوز ۲۴"
+    entries = list(state.get("today_top") or [])
+    title = "🍽️ شام خبری گادنیوز ۲۴"
     text = build_digest_text(title, entries)
     if not text:
         return False
@@ -2555,7 +2556,7 @@ ANY_LINK_RE = re.compile(r"https?://[^\s<\"']+|(?:t|telegram)\.me/[^\s<\"']+", r
 
 def swap_channel(h, all_links=False):
     """آیدی و لینک کانال کیوسک رو با آیدی و لینک کانال خودمون عوض می‌کنه.
-    all_links=True (برای «نگاه گذرا»): همه‌ی لینک‌ها به لینک کانال خودمون تبدیل می‌شن."""
+    all_links=True (برای «صبحانه خبری»): همه‌ی لینک‌ها به لینک کانال خودمون تبدیل می‌شن."""
     own_link = "https://t.me/" + CHANNEL.lstrip("@")
     link_re = ANY_LINK_RE if all_links else KIOSK_LINK_RE
     out = []
@@ -2574,15 +2575,35 @@ def swap_channel(h, all_links=False):
     return "".join(out)
 
 
+# عنوان جدید پست «نگاهی گذرا» کیوسک (نسخه‌ی x): این پست با همین عنوان،
+# صبحانه خبری کاناله؛ ایموجی 🍳 همونیه که خلاصه‌ی صبحانه‌ی قبلی داشت.
+SUMMARY_TITLE = "🍳 صبحانه خبری گادنیوز۲۴"
+
+def retitle_summary(h):
+    """عنوان پست «نگاهی گذرا» کیوسک رو به «صبحانه خبری گادنیوز۲۴» عوض می‌کنه:
+    فقط خط اول، اگه «نگاهی گذرا» توش باشه؛ بقیه‌ی متن دست نمی‌خوره. اگه خط
+    اول عنوان نباشه (کیوسک عنوان رو عوض کرده باشه)، چیزی عوض نمی‌شه."""
+    lines = h.split("\n")
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        plain = re.sub(r"<[^>]+>", "", line).strip()
+        if "نگاهی گذرا" in plain:
+            lines[i] = SUMMARY_TITLE
+        break
+    return "\n".join(lines)
+
 def run_special(kind, p, seen, ks):
     text = p["html"]
     if kind in ("morning", "night"):
         text, proxy = remove_hashtags(text), False   # هشتگ پاک می‌شه، بدون پروکسی
     else:
-        proxy = True                                  # نگاه گذرا و روزنامه‌ها: + پروکسی
+        proxy = True                                  # صبحانه خبری و روزنامه‌ها: + پروکسی
     text = drop_id_lines(text)                              # امضای آخرِ کیوسک حذف می‌شه
     text = swap_channel(text, all_links=(kind == "summary"))
     text = strip_leading_emoji_html(text)                   # اول متن ایموجی نباشه
+    if kind == "summary":
+        text = retitle_summary(text)   # نسخه‌ی x: «نگاهی گذرا» با این عنوان، صبحانه خبری کاناله
     ok = send_special(text, p["media"], proxy)
     if ok:
         seen[p["id"]] = None
@@ -2693,7 +2714,7 @@ def merge_remote_state(state, remote):
     state["muted_categories"] = _lmc
     if remote.get("last_post_ids"):
         state["last_post_ids"] = list(dict.fromkeys(list(state.get("last_post_ids") or []) + list(remote.get("last_post_ids") or [])))[-10:]
-    # خبرهای مهم روز (برای صبحانه/شام خبری): اگه روزشون فرق داشت، تازه‌تر می‌مونه؛
+    # خبرهای مهم روز (برای شام خبری): اگه روزشون فرق داشت، تازه‌تر می‌مونه؛
     # اگه هم‌روز بودن، با هم ادغام می‌شن تا چیزی گم نشه
     for _key in ("today_top", "prev_top"):
         _lcl, _rmt = list(state.get(_key) or []), list(remote.get(_key) or [])
@@ -2938,7 +2959,7 @@ def run_once():
             if send(item):
                 state["last_post"] = time.time()
                 count_post(state, item.get("src", "?"), item_main_category(item))
-                record_top(state, item, day_id)   # برای صبحانه/شام خبری (لیست قیمت ثبت نمی‌شه)
+                record_top(state, item, day_id)   # برای شام خبری (لیست قیمت ثبت نمی‌شه)
                 seen[item["id"]] = None
                 recent.append({"t": time.time(), "k": sorted(item["tok"])})
                 state["seen"] = list(seen)
@@ -2951,14 +2972,6 @@ def run_once():
                 log_rejected(item.get("src", "?"), "خطا در ارسال", item["title"],
                              item["id"][3:] if str(item["id"]).startswith("tg:") else None, LAST_TG_ERROR[0])
             time.sleep(3)
-
-        # صبحانه خبری: ۰۹:۰۰ تا ۱۱:۰۰ تهران، یک بار در روز (خالی باشه رد می‌شه و علامت نمی‌خوره)
-        if not only_night and 540 <= m < 660 and not dg.get("morning"):
-            try:
-                if send_digest(state, "morning", day_id, th):
-                    save_state(state)
-            except Exception as ex:
-                print("morning digest error:", repr(ex))
 
         # شام خبری (نسخه‌ی i): فقط در همان دوری که «شب بخیر» فرستاده می‌شه،
         # درست قبل از اون — یعنی پیام یکی‌مانده‌به‌آخر. قبلاً ساعت ۲۳:۰۰ به‌تنهایی
@@ -3004,7 +3017,7 @@ def run_once():
                 if m >= 600 and not ks["morning"]:
                     alert("kiosk_morning", "⚠️ تا ساعت ۱۰ پیام «صبح بخیر» کیوسک پیدا نشد.", 20)
                 if m >= 660 and not ks["summary"]:
-                    alert("kiosk_summary", "⚠️ تا ساعت ۱۱ پیام «نگاهی گذرا» کیوسک پیدا نشد.", 20)
+                    alert("kiosk_summary", "⚠️ تا ساعت ۱۱ پیام «صبحانه خبری» کیوسک پیدا نشد.", 20)
             if only_night and not ks["night"]:
                 alert("kiosk_night", "⚠️ پیام «شب بخیر» کیوسک امشب پیدا نشد.", 20)
         state["upload_fail_runs"] = state.get("upload_fail_runs", 0) + 1 if UPLOAD_FAILS[0] >= 2 else 0
