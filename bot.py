@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.06"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.07"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -756,9 +756,17 @@ def parse_tg_page(page, allow_media_only=False):
             if not body and not media:
                 continue
             t = box.select_one("time")
+            # نسخه‌ی ۰.۰۷: اگه پست ریپلای به پست دیگه‌ای از همون کاناله، لینک پست
+            # پدر از بلوک «tgme_widget_message_reply» خونده می‌شه (مثلاً AloNews/12340).
+            reply_to = None
+            rep = box.select_one("a.tgme_widget_message_reply")
+            if rep:
+                m = re.search(r"https?://t\.me/([^/\"?#]+)/(\d+)", rep.get("href") or "")
+                if m:
+                    reply_to = f"{m.group(1)}/{m.group(2)}"
             posts.append({"post_id": post_id, "text": body.get_text() if body else "",
                           "html": body.decode_contents() if body else "", "media": media,
-                          "dt": t.get("datetime") if t else None})
+                          "dt": t.get("datetime") if t else None, "reply_to": reply_to})
     else:
         for blk in re.split(r'(?=<div class="tgme_widget_message_wrap)', page)[1:]:
             pid = re.search(r'data-post="([^"]+)"', blk)
@@ -775,8 +783,11 @@ def parse_tg_page(page, allow_media_only=False):
             if not body and not media:
                 continue
             dt = re.search(r'<time[^>]+datetime="([^"]+)"', blk)
+            # نسخه‌ی ۰.۰۷: لینک پست پدر از بلوک ریپلای (مسیر بدون bs4).
+            rep = re.search(r'tgme_widget_message_reply[^>]*href="https?://t\.me/([^"/]+)/(\d+)"', blk)
+            reply_to = f"{rep.group(1)}/{rep.group(2)}" if rep else None
             posts.append({"post_id": pid.group(1), "text": text, "html": inner, "media": media,
-                          "dt": dt.group(1) if dt else None})
+                          "dt": dt.group(1) if dt else None, "reply_to": reply_to})
     return posts
 
 
@@ -1068,9 +1079,18 @@ def fetch_tg(category, name, domestic):
             if ts and in_skip_hours(ts):
                 skipped_night += 1
                 continue
+            # نسخه‌ی ۰.۰۷: ریپلای فقط وقتی معتبره که پست پدر از همین کانال باشه؛
+            # آیدیِ آیتم پدر «tg:کانال/شماره»ـه تا با نگاشت پست‌های خودمون جور بشه.
+            reply_to = None
+            rt = p.get("reply_to")
+            if rt:
+                chan, _, num = rt.partition("/")
+                if chan.lower() == name.lower() and num.isdigit():
+                    reply_to = "tg:" + rt
             items.append({"id": "tg:" + p["post_id"], "title": title, "summary": " ".join(paras),
                           "paras": paras, "kind": kind, "category": category, "domestic": domestic,
-                          "red_src": red_src, "src": name, "media": p["media"], "image": None, "video": None, "ts": ts})
+                          "red_src": red_src, "src": name, "media": p["media"], "image": None, "video": None, "ts": ts,
+                          "reply_to": reply_to})
     except Exception as ex:
         print("telegram channel error:", name, ex)
         READ_STATUS[name] = 0
@@ -2352,12 +2372,13 @@ def media_list(item):
     return out
 
 
-def send_single(kind, url, caption, upload_first=False):
+def send_single(kind, url, caption, upload_first=False, reply_to=None):
     method, field = ("sendVideo", "video") if kind == "video" else ("sendPhoto", "photo")
     cap = {"caption": caption} if caption else {}
+    rep = {"reply_to_message_id": reply_to} if reply_to else {}
 
     def by_url():
-        return tg(method, **{field: url}, **cap)
+        return tg(method, **{field: url}, **cap, **rep)
 
     def by_upload():   # خودمون دانلود و آپلود می‌کنیم
         if UPLOAD_FAILS[0] >= 2:
@@ -2365,7 +2386,7 @@ def send_single(kind, url, caption, upload_first=False):
         data = download(url)
         if not data:
             return False
-        return tg(method, files={field: ("file.mp4" if kind == "video" else "file.jpg", data)}, **cap)
+        return tg(method, files={field: ("file.mp4" if kind == "video" else "file.jpg", data)}, **cap, **rep)
 
     for attempt in ((by_upload, by_url) if upload_first else (by_url, by_upload)):
         if attempt():
@@ -2373,7 +2394,9 @@ def send_single(kind, url, caption, upload_first=False):
     return False
 
 
-def send_group(media, caption, upload_first=False):
+def send_group(media, caption, upload_first=False, reply_to=None):
+    rep = {"reply_to_message_id": reply_to} if reply_to else {}
+
     def first_caption(m, is_first):
         if is_first and caption:
             m["caption"] = caption
@@ -2383,7 +2406,7 @@ def send_group(media, caption, upload_first=False):
 
     def by_url():
         arr = [first_caption({"type": k, "media": u}, i == 0) for i, (k, u) in enumerate(media)]
-        return tg("sendMediaGroup", media=json.dumps(arr))
+        return tg("sendMediaGroup", media=json.dumps(arr), **rep)
 
     def by_upload():
         if UPLOAD_FAILS[0] >= 2:
@@ -2397,7 +2420,7 @@ def send_group(media, caption, upload_first=False):
             files[fname] = (fname + (".mp4" if k == "video" else ".jpg"), d)
             arr.append(first_caption({"type": k, "media": f"attach://{fname}"}, not arr))
         if len(arr) >= 2:
-            return tg("sendMediaGroup", files=files, media=json.dumps(arr))
+            return tg("sendMediaGroup", files=files, media=json.dumps(arr), **rep)
         return False
 
     for attempt in ((by_upload, by_url) if upload_first else (by_url, by_upload)):
@@ -2411,58 +2434,91 @@ def _record_sent_ids():
     if st is not None and LAST_TG_IDS:
         st["last_post_ids"] = list(LAST_TG_IDS[-10:])
 
+POST_MAP_MAX = 2000   # سقف نگاشت آیدی خبر منبع → آیدی پیام خودمون در کانال
+
+def _record_post_map(item):
+    """آیدی پیامِ پستِ تازه‌منتشرشده رو با آیدی خبرِ منبع ذخیره می‌کنه
+    (نسخه‌ی ۰.۰۷: برای اینکه خبرهای بعدیِ ریپلای‌شده به همین پست ریپلای بشن؛
+    اولین پیام پست، آیدیِ پسته — مثل لینک شام خبری)."""
+    st = STATE_REF[0]
+    if st is None or not LAST_TG_IDS:
+        return
+    m = st.setdefault("post_map", {})
+    m[str(item.get("id") or "")] = LAST_TG_IDS[0]
+    if len(m) > POST_MAP_MAX:
+        for k in list(m)[:len(m) - POST_MAP_MAX]:
+            del m[k]
+
+
+def _resolve_reply_to(item):
+    """اگه خبر ریپلای به پستی بود که قبلاً خودمون تو کانال گذاشتیم، آیدی پیام
+    خودمون رو برمی‌گردونه؛ وگرنه None (پست بدون ریپلای می‌ره)."""
+    rt = item.get("reply_to")
+    if not rt:
+        return None
+    st = STATE_REF[0]
+    if st is None:
+        return None
+    return (st.get("post_map") or {}).get(rt)
+
 def send(item):
     """هر خبر دقیقاً یک پست می‌شه (نسخه‌ی j: هیچ خبری تکه‌تکه نمی‌ره).
     همه‌ی عکس‌ها و فیلم‌های یک خبر با هم در یک پست می‌رن (یک sendMediaGroup).
     اگه گروه رسانه کاملاً شکست خورد، به‌جای یک عکسِ تنها که بقیه‌ی رسانه‌ها رو
     دور می‌ریزه، فقط متن فرستاده می‌شه. تک‌رسانه‌ای بودن با send_single مشکلی نداره.
-    متن با build_text تا سقف یک پیام (۴۰۰۰) جا می‌شه؛ وسط جمله «…» نمی‌آد."""
+    متن با build_text تا سقف یک پیام (۴۰۰۰) جا می‌شه؛ وسط جمله «…» نمی‌آد.
+    نسخه‌ی ۰.۰۷: اگه خبر ریپلای به پستی بود که قبلاً خودمون تو کانال گذاشتیم،
+    اولین پیامِ پست به همون پیام ریپلای می‌شه (متنِ بعدیِ عکس، ریپلای نمی‌شه؛
+    اگه رسانه نرفت و فقط متن رفت، همون متن ریپلای می‌شه)."""
     LAST_TG_IDS.clear()
     media = media_list(item)
     full_text = build_text(item)  # یک پیام، حداکثر ۴۰۰۰ کاراکتر
     up = str(item.get("id", "")).startswith("tg:")   # تلگرام لینک عکس کانال‌ها رو نمی‌تونه بگیره؛ مستقیم آپلود
     ok = False
+    reply_to = _resolve_reply_to(item)
+    rep = {"reply_to_message_id": reply_to} if reply_to else {}
     if not media:
-        ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+        ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     elif item.get("short"):
         # پست کوتاه (ایندیپندنت فارسی): عکس و متن با هم در یک پست می‌رن (کپشن)؛
         # اگه کپشن به هر دلیلی نرفت، متن تنها در یک پیام می‌ره
         caption = build_text(item, max_len=1000)
         if len(media) >= 2:
-            if send_group(media, caption, up):
+            if send_group(media, caption, up, reply_to):
                 ok = True
             else:
                 print("  media group failed; sending text only (no single-media fallback that drops media)")
-                ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
-        elif send_single(media[0][0], media[0][1], caption, up):
+                ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
+        elif send_single(media[0][0], media[0][1], caption, up, reply_to):
             ok = True
         else:
-            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     elif len(full_text) > 1000:
         # متن طولانی با عکس: اول عکس بدون کپشن، بعد متن کامل در یک پیام جداگانه
         # (کپشن تلگرام بیشتر از ۱۰۲۴ کاراکتر نمی‌گیره؛ خود خبر تکه نمی‌شه)
         if len(media) >= 2:
-            if send_group(media, "", up):
+            if send_group(media, "", up, reply_to):
                 ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
             else:
                 print("  media group failed; sending text only (no single-media fallback that drops media)")
-                ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
-        elif send_single(media[0][0], media[0][1], "", up):
+                ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
+        elif send_single(media[0][0], media[0][1], "", up, reply_to):
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
         else:
-            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     elif len(media) >= 2:
-        if send_group(media, build_text(item, max_len=1000), up):
+        if send_group(media, build_text(item, max_len=1000), up, reply_to):
             ok = True
         else:
             print("  media group failed; sending text only (no single-media fallback that drops media)")
-            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
-    elif send_single(media[0][0], media[0][1], build_text(item, max_len=1000), up):
+            ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
+    elif send_single(media[0][0], media[0][1], build_text(item, max_len=1000), up, reply_to):
         ok = True
     else:
-        ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
+        ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     if ok:
         _record_sent_ids()
+        _record_post_map(item)
     return ok
 
 
@@ -2580,7 +2636,8 @@ def build_digest_text(title, entries):
     خالی بین هر خبر، آخرش پروکسی و بعد @GodNews24.
     حداکثر ۱۰ خبر، حداکثر ۴۰۰۰ کاراکتر؛ خالی باشه رشته‌ی خالی برمی‌گرده.
     نسخه‌ی y: خبرهایی که لینک دارن (عکس/فیلم یا متن بلند)، آخر خط‌شون
-    «برای دیدن خبر کامل کلیک کنید» با لینک پست خود کانال می‌گیره."""
+    «برای دیدن خبر کامل کلیک کنید» با لینک پست خود کانال می‌گیره.
+    نسخه‌ی ۰.۰۷: جمله داخل پرانتز و پررنگه تا بیشتر دیده بشه."""
     ranked = rank_top(entries)[:10]
     if not ranked:
         return ""
@@ -2594,7 +2651,7 @@ def build_digest_text(title, entries):
             line = f"{e.get('e') or '🔵'} {t}"
             link = (e.get("link") or "").strip()
             if link:
-                line += f" — <a href=\"{html.escape(link, quote=True)}\">برای دیدن خبر کامل کلیک کنید</a>"
+                line += f" — (<b><a href=\"{html.escape(link, quote=True)}\">برای دیدن خبر کامل کلیک کنید</a></b>)"
             parts.append(line)
         parts.append(proxy_parts()[0])
         parts.append(CHANNEL)
