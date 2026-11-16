@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-y"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.01"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1133,7 +1133,7 @@ def ensure_proxies():
         PROXY_CHECKED_ONCE[0] = True
 
 
-def prepare_proxies(max_checks=150):
+def prepare_proxies(max_checks=300):
     """پروکسی‌ها رو هم‌زمان چک می‌کنه (سریع، تا ساعت‌های رایگان گیت‌هاب هدر نره). همه‌ی سالم‌ها استفاده می‌شن."""
     from concurrent.futures import ThreadPoolExecutor
     ALIVE.clear()
@@ -1732,15 +1732,26 @@ def item_main_category(item):
         return "sport"
     return "general"
 
+FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+def fa_num(n):
+    """عدد رو با رقم‌های فارسی برمی‌گردونه (برای متن‌های فارسی؛ توی نمایش
+    راست‌به‌چپ، رقم لاتین از کلمه‌ی فارسی جدا می‌افته)."""
+    return str(n).translate(FA_DIGITS)
+
 def category_breakdown_lines(src_cat):
-    """خط‌های تفکیک دسته‌ها برای هر منبع: «منبع: 🔴 سیاسی ۱۲ | 🟡 اقتصادی ۸ | ...»؛
+    """خط‌های تفکیک دسته‌ها برای هر منبع (نسخه‌ی aa): اسم منبع توی یه خط جدا،
+    بعد هر دسته توی یه خط جدا: «🔴 سیاسی ۳». دلیلش: توی یه خط، اسم لاتین منبع
+    با ایموجی و کلمه‌ی فارسی و عدد لاتین قاطی می‌شد و تلگرام ایموجی و عدد رو
+    جابه‌جا نشون می‌داد؛ هر خط حالا یه پاراگراف فارسیه و سر جاش می‌مونه.
     فقط دسته‌های با حداقل یک پست؛ منبعی که داده‌ی دسته نداره (مثلاً کیوسک) نمیاد."""
     lines = []
     for src in sorted(src_cat, key=lambda s: -sum(src_cat[s].values())):
         per = src_cat[src]
-        parts = [f"{CAT_EMOJI[c]} {CATEGORY_NAMES.get(c, c)} {per[c]}" for c in CAT_ORDER if per.get(c)]
+        parts = [f"{CAT_EMOJI[c]} {CATEGORY_NAMES.get(c, c)} {fa_num(per[c])}" for c in CAT_ORDER if per.get(c)]
         if parts:
-            lines.append(f"{src}: " + " | ".join(parts))
+            lines.append(f"{src}:")
+            lines.extend(parts)
     return lines
 
 def _send_admin_text(text):
