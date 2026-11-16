@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-x"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-y"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -2402,6 +2402,18 @@ def send_special(text, media, proxy):
 # هر خبر معمولیِ موفق در state["today_top"] ثبت می‌شه (حداکثر ۵۰ تا؛ لیست قیمت
 # و کیوسک ثبت نمی‌شن). با عوض شدن «روز» کانال، today_top به prev_top منتقل می‌شه
 # (prev_top از نسخه‌ی x دیگه خوانده نمی‌شه؛ صبحانه خبری پست کیوسکه).
+# سقف متن خبر برای لینک «خبر کامل» تو شام خبری (نسخه‌ی y): اگه متن کامل خبر
+# (تیتر + متن) از این بلندتر باشه، تیترِ شام خبری نمی‌رسوندش و لینک می‌گیره.
+TOP_LINK_MIN_TEXT = 500
+
+def item_has_more(item):
+    """خبر «بیشتر» داره یا نه (نسخه‌ی y): عکس/فیلم داره، یا متن کاملش اون‌قدر
+    بلنده که تیترِ شام خبری نمی‌رسوندش."""
+    if media_list(item):
+        return True
+    full = ((item.get("title") or "") + " " + (item.get("summary") or "")).strip()
+    return len(full) > TOP_LINK_MIN_TEXT
+
 def record_top(state, item, day_id):
     """خبر معمولیِ تازه‌منتشرشده رو برای خلاصه‌های روز ثبت می‌کنه."""
     try:
@@ -2413,10 +2425,14 @@ def record_top(state, item, day_id):
         lead, _marker = decide(item)
         red = (lead == "🔴" or bool(item.get("red_src"))
                or bool(RED_RE.search(title)) or _dyn_match("red", title))
+        link = ""
+        if item_has_more(item) and LAST_TG_IDS:
+            # نسخه‌ی y: لینک پست خود کانال (اولین پیام پست: عکس اول، وگرنه متن)
+            link = f"https://t.me/{CHANNEL.lstrip('@')}/{LAST_TG_IDS[0]}"
         top = state.setdefault("today_top", [])
         if any((e.get("t") or "") == title for e in top):
             return
-        top.append({"t": title, "e": lead, "red": red, "ts": time.time(), "src": item.get("src", "?")})
+        top.append({"t": title, "e": lead, "red": red, "ts": time.time(), "src": item.get("src", "?"), "link": link})
         state["today_top"] = top[-50:]
         state["today_top_day"] = day_id
     except Exception as ex:
@@ -2444,7 +2460,9 @@ def rank_top(entries):
 def build_digest_text(title, entries):
     """متن خلاصه (نسخه‌ی h): تیتر بدون تاریخ، خبرها بدون شماره و با یک خط
     خالی بین هر خبر، آخرش پروکسی و بعد @GodNews24.
-    حداکثر ۱۰ خبر، حداکثر ۴۰۰۰ کاراکتر؛ خالی باشه رشته‌ی خالی برمی‌گرده."""
+    حداکثر ۱۰ خبر، حداکثر ۴۰۰۰ کاراکتر؛ خالی باشه رشته‌ی خالی برمی‌گرده.
+    نسخه‌ی y: خبرهایی که لینک دارن (عکس/فیلم یا متن بلند)، آخر خط‌شون
+    «برای دیدن خبر کامل کلیک کنید» با لینک پست خود کانال می‌گیره."""
     ranked = rank_top(entries)[:10]
     if not ranked:
         return ""
@@ -2455,7 +2473,11 @@ def build_digest_text(title, entries):
             t = (e.get("t") or "").strip()
             if len(t) > max_title:
                 t = t[:max_title].rsplit(" ", 1)[0]   # بدون «…»؛ از مرز کلمه کوتاه می‌شه
-            parts.append(f"{e.get('e') or '🔵'} {t}")
+            line = f"{e.get('e') or '🔵'} {t}"
+            link = (e.get("link") or "").strip()
+            if link:
+                line += f" — <a href=\"{html.escape(link, quote=True)}\">برای دیدن خبر کامل کلیک کنید</a>"
+            parts.append(line)
         parts.append(proxy_parts()[0])
         parts.append(CHANNEL)
         return "\n\n".join(parts)
