@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.01"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.02"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -440,14 +440,22 @@ def decide(item):
         return "🏘️", MARKER["🟡"]
     if has_strike_event(head):
         return "🔴", MARKER["🔴"]
-    if is_car_post(head, full):
+    if is_car_post(head, full) or _dyn_match("car", head):
         return "🚙", MARKER["🟡"]
-    if PLANE_RE.search(" ".join(title.split()[:6])):
+    if PLANE_RE.search(" ".join(title.split()[:6])) or _dyn_match("plane", head):
         return "✈️", MARKER[cls]
     if DRUG_RE.search(head):
         return "💊", MARKER[cls]
-    if is_football(head, item["category"]):
+    if is_football(head, item["category"]) or _dyn_match("football", head):
         return "⚽", MARKER["🔵"]
+    # دسته‌های ایموجی جدید (نسخه‌ی 0.02): کلمه‌های زیر هر ایموجی خبر رو با همون
+    # ایموجی می‌فرستن؛ مثل بقیه‌ی ایموجی‌های موضوعی، قبل از 🔴/🟡 چک می‌شن.
+    if _dyn_match("tech", head):
+        return "🤖", MARKER["🔵"]
+    if _dyn_match("meat", head):
+        return "🥩", MARKER["🔵"]
+    if _dyn_match("chicken", head):
+        return "🍗", MARKER["🔵"]
     # شخص‌ها و کلمه‌های 🔴: هر کدوم که توی تیتر/بند اول زودتر اومده
     cands = []
     for prx, code in PERSON_FLAGS:
@@ -1150,18 +1158,27 @@ def prepare_proxies(max_checks=300):
 
 
 # ====== فایل قوانین قابل ویرایش (rules.txt) ======
-RULES_SECTIONS = {"[ممنوع]": "blocked", "[blocked]": "blocked", "[🔴]": "red", "[red]": "red", "[🟡]": "yellow", "[yellow]": "yellow", "[🔵]": "blue", "[blue]": "blue", "[پاک شود از آخر متن]": "strip_end", "[strip_end]": "strip_end"}
-RULES_SECTION_TITLES = {"blocked": "[ممنوع]", "red": "[🔴]", "yellow": "[🟡]", "blue": "[🔵]", "strip_end": "[پاک شود از آخر متن]"}
+RULES_SECTIONS = {"[ممنوع]": "blocked", "[blocked]": "blocked", "[🔴]": "red", "[red]": "red", "[🟡]": "yellow", "[yellow]": "yellow", "[🔵]": "blue", "[blue]": "blue", "[⚽]": "football", "[football]": "football", "[🤖]": "tech", "[tech]": "tech", "[✈]": "plane", "[plane]": "plane", "[🚙]": "car", "[car]": "car", "[🥩]": "meat", "[meat]": "meat", "[🍗]": "chicken", "[chicken]": "chicken", "[پاک شود از آخر متن]": "strip_end", "[strip_end]": "strip_end"}
+RULES_SECTION_TITLES = {"blocked": "[ممنوع]", "red": "[🔴]", "yellow": "[🟡]", "blue": "[🔵]", "football": "[⚽]", "tech": "[🤖]", "plane": "[✈️]", "car": "[🚙]", "meat": "[🥩]", "chicken": "[🍗]", "strip_end": "[پاک شود از آخر متن]"}
+# ایموجی ← کلید دسته (برای /add و /remove)؛ تلگرام بعضی ایموجی‌ها رو با
+# کاراکتر انتخابگر U+FE0F می‌فرسته (مثلاً ✈️)، پس موقع مقایسه اون کاراکتر حذف می‌شه.
+EMOJI_CATEGORY_KEYS = {"🔴": "red", "🟡": "yellow", "🔵": "blue", "⚽": "football",
+                      "🤖": "tech", "✈": "plane", "🚙": "car", "🥩": "meat", "🍗": "chicken"}
+EMOJI_LIST_STR = "🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗"
+
+def _norm_emoji(tok):
+    return (tok or "").replace("\uFE0F", "")
 
 def parse_rules_text(text):
-    out = {"blocked": [], "red": [], "yellow": [], "blue": [], "strip_end": []}
+    out = {"blocked": [], "red": [], "yellow": [], "blue": [], "football": [], "tech": [],
+           "plane": [], "car": [], "meat": [], "chicken": [], "strip_end": []}
     cur = None
     for raw in (text or "").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        if line in RULES_SECTIONS:
-            cur = RULES_SECTIONS[line]
+        if line.replace("\uFE0F", "") in RULES_SECTIONS:
+            cur = RULES_SECTIONS[line.replace("\uFE0F", "")]
             continue
         if cur is None:
             continue
@@ -1217,7 +1234,7 @@ def load_rules():
 def format_rules_text(rules=None):
     rules = rules or DYNAMIC_RULES
     lines = []
-    for key in ("blocked", "red", "yellow", "blue", "strip_end"):
+    for key in ("blocked", "red", "yellow", "blue", "football", "tech", "plane", "car", "meat", "chicken", "strip_end"):
         lines.append(RULES_SECTION_TITLES[key])
         for w in rules.get(key, []):
             lines.append(w)
@@ -1604,7 +1621,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/send متن یا عکس ← ارسال خبر دلخواه (متن یا عکس/ویدیو) به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع [دسته] ← بی‌صدا کردن موقت یک منبع یا فقط یک دسته از آن (سیاسی، اقتصادی، ورزشی)\n/unmute منبع [دسته] ← برگردوندن منبع یا یک دسته\n/muted ← لیست منبع‌ها و دسته‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
-             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵 کلمه ← اضافه کردن کلمه به ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
+             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗 کلمه ← اضافه کردن کلمه به ایموجی\n/remove ایموجی کلمه ← حذف کلمه از ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
 
 
 # ====== منوی دکمه‌ای (ReplyKeyboard) در چت خصوصی ادمین ======
@@ -1617,17 +1634,18 @@ MENU_BUTTONS = [
     ("📜 قوانین", "/rules"),
     ("🚫 ردشده‌ها", "/skipped"),
     ("⚠️ خطاها", "/errors"),
-    ("🧪 تست", "/test"),
-    ("🔇 بی‌صداها", "/muted"),
-    ("❓ راهنما", "/help"),
     ("✉️ ارسال خبر", "/send"),
-    ("🗑 حذف آخرین پست", "/delete"),
+    ("🔇 بی‌صداها", "/muted"),
+    ("🚫 مسدود کردن", "/block"),
     ("🔕 بی‌صدا کردن", "/mute"),
     ("🔔 برگردوندن منبع", "/unmute"),
-    ("🚫 مسدود کردن", "/block"),
+    ("➖ حذف از ایموجی", "/remove"),
     ("➕ اضافه به ایموجی", "/add"),
     ("✂️ پاک‌شونده اضافه", "/strip"),
     ("↩️ پاک‌شونده حذف", "/unstrip"),
+    ("🗑 حذف آخرین پست", "/delete"),
+    ("🧪 تست", "/test"),
+    ("❓ راهنما", "/help"),
 ]
 MENU_TEXT_TO_CMD = {label: cmd for label, cmd in MENU_BUTTONS}
 
@@ -1638,7 +1656,8 @@ MENU_PROMPTS = {
     "/mute": chr(10).join(["اسم منبع رو بفرست (مثلاً AloNews).", "برای بی‌صدا کردن فقط یه دسته، «منبع دسته» بفرست (مثلاً euronews سیاسی).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/unmute": chr(10).join(["اسم منبعی که می‌خوای برگرده رو بفرست (مثلاً AloNews).", "برای برگردوندن فقط یه دسته، «منبع دسته» بفرست (مثلاً euronews سیاسی).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/block": chr(10).join(["کلمه‌ی ممنوع رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
-    "/add": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/add": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/remove": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/strip": chr(10).join(["عبارت پاک‌شونده رو بفرست (مثلاً / ایسنا).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/unstrip": chr(10).join(["عبارتی که می‌خوای از پاک‌شونده‌ها حذف بشه رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
 }
@@ -1647,7 +1666,7 @@ MENU_PENDING_TIMEOUT = 600  # ثانیه؛ اگه ادمین تا این مدت 
 # همه‌ی دستورهایی که handle_command می‌شناسه؛ برای اینکه وقتی منتظر آرگومانیم،
 # متنی که با «/» شروع می‌شه ولی دستور نیست (مثلاً «/ ایسنا») آرگومان حساب بشه.
 KNOWN_COMMANDS = {"/start", "/help", "/menu", "/status", "/stats", "/rules",
-                  "/block", "/add", "/strip", "/unstrip", "/send", "/delete",
+                  "/block", "/add", "/remove", "/strip", "/unstrip", "/send", "/delete",
                   "/mute", "/unmute", "/muted", "/skipped", "/errors", "/ads",
                   "/pause", "/resume", "/test"}
 
@@ -1833,7 +1852,7 @@ def handle_command(state, cmd, full_text=""):
     elif cmd == "/rules":
         r = DYNAMIC_RULES
         lines = ["📜 قوانین فعلی (rules.txt):"]
-        for key, label in (("blocked", "ممنوع"), ("red", "🔴"), ("yellow", "🟡"), ("blue", "🔵"), ("strip_end", "پاک شود از آخر متن")):
+        for key, label in (("blocked", "ممنوع"), ("red", "🔴"), ("yellow", "🟡"), ("blue", "🔵"), ("football", "⚽"), ("tech", "🤖"), ("plane", "✈️"), ("car", "🚙"), ("meat", "🥩"), ("chicken", "🍗"), ("strip_end", "پاک شود از آخر متن")):
             words = r.get(key, [])
             lines.append(f"{label} ({len(words)}): " + ("، ".join(words) if words else "—"))
         admin_send("\n".join(lines))
@@ -1852,11 +1871,11 @@ def handle_command(state, cmd, full_text=""):
             admin_send(f"✅ «{w}» به ممنوع اضافه شد.")
     elif cmd == "/add":
         toks = arg.split(None, 1)
-        if len(toks) < 2 or toks[0] not in ("🔴", "🟡", "🔵"):
-            admin_send("مثال: /add 🔴 کلمه  یا  /add 🟡 کلمه")
+        if len(toks) < 2 or _norm_emoji(toks[0]) not in EMOJI_CATEGORY_KEYS:
+            admin_send(f"مثال: /add 🔴 کلمه  یا  /add ⚽ کلمه (ایموجی‌ها: {EMOJI_LIST_STR})")
         else:
             emoji, w = toks[0], toks[1].strip()
-            key = {"🔴": "red", "🟡": "yellow", "🔵": "blue"}[emoji]
+            key = EMOJI_CATEGORY_KEYS[_norm_emoji(emoji)]
             if len(w.replace(" ", "").replace("\u200c", "")) < 3:
                 admin_send("کلمه باید حداقل ۳ حرف باشد.")
             elif w in DYNAMIC_RULES.get(key, []):
@@ -1868,6 +1887,22 @@ def handle_command(state, cmd, full_text=""):
                 except Exception as ex:
                     print("save rules error:", ex)
                 admin_send(f"✅ «{w}» به {emoji} اضافه شد.")
+    elif cmd == "/remove":
+        toks = arg.split(None, 1)
+        if len(toks) < 2 or _norm_emoji(toks[0]) not in EMOJI_CATEGORY_KEYS:
+            admin_send(f"مثال: /remove 🔴 کلمه  یا  /remove ⚽ کلمه (ایموجی‌ها: {EMOJI_LIST_STR})")
+        else:
+            emoji, w = toks[0], toks[1].strip()
+            key = EMOJI_CATEGORY_KEYS[_norm_emoji(emoji)]
+            if w not in DYNAMIC_RULES.get(key, []):
+                admin_send(f"«{w}» در {emoji} نیست.")
+            else:
+                DYNAMIC_RULES[key] = [x for x in DYNAMIC_RULES.get(key, []) if x != w]
+                try:
+                    save_rules_file(); commit_rules()
+                except Exception as ex:
+                    print("save rules error:", ex)
+                admin_send(f"✅ «{w}» از {emoji} حذف شد.")
     elif cmd == "/strip":
         ph = arg.strip()
         if len(ph) < 3:
