@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.08"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.09"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -866,7 +866,16 @@ def remove_hashtags(h):
 def kiosk_kind(p):
     key = re.sub(r"[\s\u200c_]+", "", p["text"])
     photos = [m for m in p["media"] if m[0] == "photo"]
-    if "نگاهیگذرا" in key:
+    # نسخه‌ی ۰.۰۹: «صبحانه خبری» فقط وقتی خط اول پست «نگاهی گذرا» باشه؛
+    # روزنامه‌های ورزشی («نگاهی گذرا به مهم‌ترین تیترها...» در خط دوم)
+    # قبلاً به‌اشتباه صبحانه حساب می‌شد: چون جدیدتر از خلاصه‌ی واقعی بود،
+    # به‌جاش فرستاده می‌شد، تیک ✅ می‌خورد و خلاصه‌ی واقعی هیچ‌وقت نمی‌رفت.
+    first = ""
+    for line in re.sub(r"<[^>]+>", "", p["text"] or "").split("\n"):
+        if line.strip():
+            first = line.strip()
+            break
+    if "نگاهیگذرا" in re.sub(r"[\s\u200c_]+", "", first):
         return "summary"
     if "شببخیر" in key:
         return "night"
