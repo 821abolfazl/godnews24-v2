@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.07"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.08"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -426,8 +426,9 @@ def is_football(head, category):
 MARKER = {"🔴": "🔻", "🟡": "🔸", "🔵": "🔹"}
 
 
-def decide(item):
-    """ایموجی اول متن و علامت پاراگراف‌ها رو تعیین می‌کنه. اول متن فقط یک ایموجی (یا چند پرچم)."""
+def _decide_base(item):
+    """ایموجی اول متن و علامت پاراگراف‌ها رو تعیین می‌کنه (بدون در نظر گرفتن
+    نشانه‌های تنظیم‌شده با /marker). اول متن فقط یک ایموجی (یا چند پرچم)."""
     title = item["title"]
     paras = item.get("paras") or []
     summary = item.get("summary", "")
@@ -506,6 +507,14 @@ def decide(item):
     if flags:
         return flags, MARKER[cls]
     return cls, MARKER[cls]
+
+
+def decide(item):
+    """ایموجی اول متن و علامت پاراگراف‌ها رو تعیین می‌کنه.
+    نسخه‌ی ۰.۰۸: اگه برای همون ایموجی اول، نشانه‌ی پاراگراف تو قوانین
+    تنظیم شده باشه (/marker)، همون نشانه استفاده می‌شه."""
+    lead, marker = _decide_base(item)
+    return lead, marker_overrides().get(_norm_emoji(lead), marker)
 
 
 # ====== استخراج عکس و فیلم ======
@@ -1240,8 +1249,8 @@ def prepare_proxies(max_checks=300):
 
 
 # ====== فایل قوانین قابل ویرایش (rules.txt) ======
-RULES_SECTIONS = {"[ممنوع]": "blocked", "[blocked]": "blocked", "[🔴]": "red", "[red]": "red", "[🟡]": "yellow", "[yellow]": "yellow", "[🔵]": "blue", "[blue]": "blue", "[⚽]": "football", "[football]": "football", "[🤖]": "tech", "[tech]": "tech", "[✈]": "plane", "[plane]": "plane", "[🚙]": "car", "[car]": "car", "[🥩]": "meat", "[meat]": "meat", "[🍗]": "chicken", "[chicken]": "chicken", "[🚨]": "alert", "[alert]": "alert", "[🔥]": "hot", "[hot]": "hot", "[🏀]": "basketball", "[basketball]": "basketball", "[🏐]": "volleyball", "[volleyball]": "volleyball", "[🎮]": "game", "[game]": "game", "[🛩]": "jet", "[jet]": "jet", "[⛽]": "fuel", "[fuel]": "fuel", "[🏘]": "housing", "[housing]": "housing", "[🐑]": "sheep", "[sheep]": "sheep", "[🏍]": "motorcycle", "[motorcycle]": "motorcycle", "[📰]": "newspaper", "[newspaper]": "newspaper", "[💊]": "drug", "[drug]": "drug", "[پاک شود از آخر متن]": "strip_end", "[strip_end]": "strip_end"}
-RULES_SECTION_TITLES = {"blocked": "[ممنوع]", "red": "[🔴]", "yellow": "[🟡]", "blue": "[🔵]", "football": "[⚽]", "tech": "[🤖]", "plane": "[✈️]", "car": "[🚙]", "meat": "[🥩]", "chicken": "[🍗]", "alert": "[🚨]", "hot": "[🔥]", "basketball": "[🏀]", "volleyball": "[🏐]", "game": "[🎮]", "jet": "[🛩]", "fuel": "[⛽️]", "housing": "[🏘️]", "sheep": "[🐑]", "motorcycle": "[🏍️]", "newspaper": "[📰]", "drug": "[💊]", "strip_end": "[پاک شود از آخر متن]"}
+RULES_SECTIONS = {"[ممنوع]": "blocked", "[blocked]": "blocked", "[🔴]": "red", "[red]": "red", "[🟡]": "yellow", "[yellow]": "yellow", "[🔵]": "blue", "[blue]": "blue", "[⚽]": "football", "[football]": "football", "[🤖]": "tech", "[tech]": "tech", "[✈]": "plane", "[plane]": "plane", "[🚙]": "car", "[car]": "car", "[🥩]": "meat", "[meat]": "meat", "[🍗]": "chicken", "[chicken]": "chicken", "[🚨]": "alert", "[alert]": "alert", "[🔥]": "hot", "[hot]": "hot", "[🏀]": "basketball", "[basketball]": "basketball", "[🏐]": "volleyball", "[volleyball]": "volleyball", "[🎮]": "game", "[game]": "game", "[🛩]": "jet", "[jet]": "jet", "[⛽]": "fuel", "[fuel]": "fuel", "[🏘]": "housing", "[housing]": "housing", "[🐑]": "sheep", "[sheep]": "sheep", "[🏍]": "motorcycle", "[motorcycle]": "motorcycle", "[📰]": "newspaper", "[newspaper]": "newspaper", "[💊]": "drug", "[drug]": "drug", "[پاک شود از آخر متن]": "strip_end", "[strip_end]": "strip_end", "[ایموجی پاراگراف]": "markers", "[markers]": "markers"}
+RULES_SECTION_TITLES = {"blocked": "[ممنوع]", "red": "[🔴]", "yellow": "[🟡]", "blue": "[🔵]", "football": "[⚽]", "tech": "[🤖]", "plane": "[✈️]", "car": "[🚙]", "meat": "[🥩]", "chicken": "[🍗]", "alert": "[🚨]", "hot": "[🔥]", "basketball": "[🏀]", "volleyball": "[🏐]", "game": "[🎮]", "jet": "[🛩]", "fuel": "[⛽️]", "housing": "[🏘️]", "sheep": "[🐑]", "motorcycle": "[🏍️]", "newspaper": "[📰]", "drug": "[💊]", "markers": "[ایموجی پاراگراف]", "strip_end": "[پاک شود از آخر متن]"}
 # ایموجی ← کلید دسته (برای /add و /remove)؛ تلگرام بعضی ایموجی‌ها رو با
 # کاراکتر انتخابگر U+FE0F می‌فرسته (مثلاً ✈️)، پس موقع مقایسه اون کاراکتر حذف می‌شه.
 EMOJI_CATEGORY_KEYS = {"🔴": "red", "🟡": "yellow", "🔵": "blue", "⚽": "football",
@@ -1254,12 +1263,28 @@ EMOJI_LIST_STR = "🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|�
 def _norm_emoji(tok):
     return (tok or "").replace("\uFE0F", "")
 
+
+def _is_single_emoji(tok):
+    """یه ایموجیِ تنها (بدون متن)؛ VS16 حذف می‌شه (⛽️ همون ⛽ حساب می‌شه)."""
+    t = _norm_emoji(tok)
+    return bool(t) and len(EMOJI_RE.findall(t)) == 1
+
+
+def marker_overrides():
+    """نشانه‌های پاراگراف تنظیم‌شده در قوانین: {ایموجی اول: نشانه} (نسخه‌ی ۰.۰۸)."""
+    out = {}
+    for line in (DYNAMIC_RULES.get("markers") or []):
+        parts = (line or "").split()
+        if len(parts) == 2:
+            out[_norm_emoji(parts[0])] = parts[1]
+    return out
+
 def parse_rules_text(text):
     out = {"blocked": [], "red": [], "yellow": [], "blue": [], "football": [], "tech": [],
            "plane": [], "car": [], "meat": [], "chicken": [], "alert": [], "hot": [],
            "basketball": [], "volleyball": [], "game": [], "jet": [], "fuel": [],
            "housing": [], "sheep": [], "motorcycle": [], "newspaper": [], "drug": [],
-           "strip_end": []}
+           "markers": [], "strip_end": []}
     cur = None
     for raw in (text or "").splitlines():
         line = raw.strip()
@@ -1270,7 +1295,15 @@ def parse_rules_text(text):
             continue
         if cur is None:
             continue
-        if cur == "strip_end":
+        if cur == "markers":
+            # نسخه‌ی ۰.۰۸: هر خط «ایموجی اول ایموجی پاراگراف»ـه (مثلاً «🔴 🔻»)؛
+            # خط ناقص یا غیرایموجی نادیده گرفته می‌شه.
+            parts = line.split()
+            if len(parts) == 2 and _is_single_emoji(parts[0]) and _is_single_emoji(parts[1]):
+                norm = f"{_norm_emoji(parts[0])} {parts[1]}"
+                if norm not in out[cur]:
+                    out[cur].append(norm)
+        elif cur == "strip_end":
             if len(line) >= 3 and line not in out[cur]:
                 out[cur].append(line)
         else:
@@ -1322,7 +1355,7 @@ def load_rules():
 def format_rules_text(rules=None):
     rules = rules or DYNAMIC_RULES
     lines = []
-    for key in ("blocked", "red", "yellow", "blue", "football", "tech", "plane", "car", "meat", "chicken", "alert", "hot", "basketball", "volleyball", "game", "jet", "fuel", "housing", "sheep", "motorcycle", "newspaper", "drug", "strip_end"):
+    for key in ("blocked", "red", "yellow", "blue", "football", "tech", "plane", "car", "meat", "chicken", "alert", "hot", "basketball", "volleyball", "game", "jet", "fuel", "housing", "sheep", "motorcycle", "newspaper", "drug", "markers", "strip_end"):
         lines.append(RULES_SECTION_TITLES[key])
         for w in rules.get(key, []):
             lines.append(w)
@@ -1705,7 +1738,7 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/send متن یا عکس ← ارسال خبر دلخواه (متن یا عکس/ویدیو) به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
              "/mute منبع [دسته] ← بی‌صدا کردن موقت یک منبع یا فقط یک دسته از آن (سیاسی، اقتصادی، ورزشی)\n/unmute منبع [دسته] ← برگردوندن منبع یا یک دسته\n/muted ← لیست منبع‌ها و دسته‌های بی‌صدا\n"
              "/stats ← آمار ۷ روز اخیر\n"
-             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|🏐|🎮|🛩|⛽️|🏘️|🐑|🏍️|📰|💊 کلمه ← اضافه کردن کلمه به ایموجی\n/remove ایموجی کلمه ← حذف کلمه از ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
+             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|🏐|🎮|🛩|⛽️|🏘️|🐑|🏍️|📰|💊 کلمه ← اضافه کردن کلمه به ایموجی\n/marker ایموجی اول ایموجی پاراگراف ← تنظیم نشانه‌ی پاراگراف برای اون ایموجی اول (فقط ایموجی اول ← برگشت به پیش‌فرض)\n/remove ایموجی کلمه ← حذف کلمه از ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
 
 
 # ====== منوی دکمه‌ای (ReplyKeyboard) در چت خصوصی ادمین ======
@@ -1721,6 +1754,7 @@ MENU_BUTTONS = [
     ("🚫 مسدود کردن", "/block"),
     ("🔕 بی‌صدا کردن", "/mute"),
     ("🔔 برگردوندن منبع", "/unmute"),
+    ("🔻 نشانه‌ی پاراگراف", "/marker"),
     ("➖ حذف از ایموجی", "/remove"),
     ("➕ اضافه به ایموجی", "/add"),
     ("✂️ پاک‌شونده اضافه", "/strip"),
@@ -1742,6 +1776,7 @@ MENU_PROMPTS = {
     "/block": chr(10).join(["کلمه‌ی ممنوع رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/add": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗🚨🔥🏀🏐🎮🛩⛽️🏘️🐑🏍️📰💊)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/remove": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗🚨🔥🏀🏐🎮🛩⛽️🏘️🐑🏍️📰💊)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/marker": chr(10).join(["ایموجی اول و ایموجی پاراگراف رو بفرست، مثلاً: 🔴 🔻  یا  ⚽ 🔹", "برای برگشت به پیش‌فرض فقط ایموجی اول رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/strip": chr(10).join(["عبارت پاک‌شونده رو بفرست (مثلاً / ایسنا).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/unstrip": chr(10).join(["عبارتی که می‌خوای از پاک‌شونده‌ها حذف بشه رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
 }
@@ -1750,7 +1785,7 @@ MENU_PENDING_TIMEOUT = 600  # ثانیه؛ اگه ادمین تا این مدت 
 # همه‌ی دستورهایی که handle_command می‌شناسه؛ برای اینکه وقتی منتظر آرگومانیم،
 # متنی که با «/» شروع می‌شه ولی دستور نیست (مثلاً «/ ایسنا») آرگومان حساب بشه.
 KNOWN_COMMANDS = {"/start", "/help", "/menu", "/status", "/stats", "/rules",
-                  "/block", "/add", "/remove", "/strip", "/unstrip", "/send", "/delete",
+                  "/block", "/add", "/marker", "/remove", "/strip", "/unstrip", "/send", "/delete",
                   "/mute", "/unmute", "/muted", "/skipped", "/errors", "/ads",
                   "/pause", "/resume", "/test"}
 
@@ -1944,7 +1979,7 @@ def handle_command(state, cmd, full_text=""):
     elif cmd == "/rules":
         r = DYNAMIC_RULES
         lines = ["📜 قوانین فعلی (rules.txt):"]
-        for key, label in (("blocked", "ممنوع"), ("red", "🔴"), ("yellow", "🟡"), ("blue", "🔵"), ("football", "⚽"), ("tech", "🤖"), ("plane", "✈️"), ("car", "🚙"), ("meat", "🥩"), ("chicken", "🍗"), ("alert", "🚨"), ("hot", "🔥"), ("basketball", "🏀"), ("volleyball", "🏐"), ("game", "🎮"), ("jet", "🛩"), ("fuel", "⛽️"), ("housing", "🏘️"), ("sheep", "🐑"), ("motorcycle", "🏍️"), ("newspaper", "📰"), ("drug", "💊"), ("strip_end", "پاک شود از آخر متن")):
+        for key, label in (("blocked", "ممنوع"), ("red", "🔴"), ("yellow", "🟡"), ("blue", "🔵"), ("football", "⚽"), ("tech", "🤖"), ("plane", "✈️"), ("car", "🚙"), ("meat", "🥩"), ("chicken", "🍗"), ("alert", "🚨"), ("hot", "🔥"), ("basketball", "🏀"), ("volleyball", "🏐"), ("game", "🎮"), ("jet", "🛩"), ("fuel", "⛽️"), ("housing", "🏘️"), ("sheep", "🐑"), ("motorcycle", "🏍️"), ("newspaper", "📰"), ("drug", "💊"), ("markers", "ایموجی پاراگراف"), ("strip_end", "پاک شود از آخر متن")):
             words = r.get(key, [])
             lines.append(f"{label} ({len(words)}): " + ("، ".join(words) if words else "—"))
         admin_send("\n".join(lines))
@@ -1979,6 +2014,34 @@ def handle_command(state, cmd, full_text=""):
                 except Exception as ex:
                     print("save rules error:", ex)
                 admin_send(f"✅ «{w}» به {emoji} اضافه شد.")
+    elif cmd == "/marker":
+        toks = arg.split()
+        if len(toks) == 1 and _is_single_emoji(toks[0]):
+            # فقط ایموجی اول: حذف نشانه‌ی تنظیم‌شده → برگشت به پیش‌فرض
+            lead = _norm_emoji(toks[0])
+            cur = list(DYNAMIC_RULES.get("markers", []))
+            new = [x for x in cur if _norm_emoji(x.split()[0]) != lead]
+            if len(new) == len(cur):
+                admin_send(f"برای {toks[0]} نشانه‌ی خاصی تنظیم نشده؛ پیش‌فرض همونه.")
+            else:
+                DYNAMIC_RULES["markers"] = new
+                try:
+                    save_rules_file(); commit_rules()
+                except Exception as ex:
+                    print("save rules error:", ex)
+                admin_send(f"✅ نشانه‌ی پاراگراف {toks[0]} به پیش‌فرض برگشت.")
+        elif len(toks) == 2 and _is_single_emoji(toks[0]) and _is_single_emoji(toks[1]):
+            lead, mark = _norm_emoji(toks[0]), toks[1]
+            cur = [x for x in DYNAMIC_RULES.get("markers", []) if _norm_emoji(x.split()[0]) != lead]
+            cur.append(f"{toks[0]} {mark}")
+            DYNAMIC_RULES["markers"] = cur
+            try:
+                save_rules_file(); commit_rules()
+            except Exception as ex:
+                print("save rules error:", ex)
+            admin_send(f"✅ از این به بعد خبرهای {toks[0]} با نشانه‌ی {mark} می‌رن.")
+        else:
+            admin_send("مثال: /marker 🔴 🔻  یا  /marker ⚽ 🔹\nبرای برگشت به پیش‌فرض فقط ایموجی اول رو بفرست: /marker ⚽")
     elif cmd == "/remove":
         toks = arg.split(None, 1)
         if len(toks) < 2 or _norm_emoji(toks[0]) not in EMOJI_CATEGORY_KEYS:
