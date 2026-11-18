@@ -13,7 +13,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.10"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.11"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1160,6 +1160,9 @@ def fetch_feed(category, url, domestic):
                 continue
             if is_greeting_post(title + " " + e.get("summary", "")):
                 log_rejected(urlparse(url).netloc, "پیام صبح/شب بخیر (غیر از کیوسک)", title)
+                continue
+            if is_blocked(title + " " + e.get("summary", "")):
+                log_rejected(urlparse(url).netloc, "کلمه‌ی ممنوع", title)
                 continue
             if "euronews" in url and (re.match(r"\s*مجله[\s\u200c]*خبری", title) or "mglh-khbri" in (e.get("link") or "")):
                 continue   # «مجله خبری» یورونیوز منتشر نمی‌شه
