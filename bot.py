@@ -14,7 +14,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.12"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-18-0.13"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1829,15 +1829,30 @@ SOURCE_ALIASES = {
 def normalize_source(raw):
     return (raw or "").strip().lstrip("@").lower()
 
+def _mute_key(s):
+    """کلید بی‌صدا را برای تطبیق یکدست می‌کند: http/https و www و / پایانی
+    حذف می‌شود تا «http://www.isna.ir» با فید «https://www.isna.ir/rss» جور شود
+    (وگرنه تطبیق زیررشته‌ای به‌خاطر http در برابر https نمی‌گرفت)."""
+    s = (s or "").strip().lower()
+    if s.startswith("http://"):
+        s = s[7:]
+    elif s.startswith("https://"):
+        s = s[8:]
+    if s.startswith("www."):
+        s = s[4:]
+    return s.rstrip("/")
+
+
 def source_muted_key(state, url):
     muted = [m.lower() for m in (state.get("muted_sources") or [])]
     if not muted:
         return False
     if url.startswith("tg:"):
         return url[3:].lower() in muted
-    low = url.lower()
+    low = _mute_key(url)
     for m in muted:
-        if m in low:
+        m = _mute_key(m)
+        if m and m in low:
             return True
     return False
 
@@ -1870,7 +1885,7 @@ def muted_category_of(state, item):
         return None
     src = (item.get("src") or "").lower()
     for key, cats in mc.items():
-        k = (key or "").lower()
+        k = _mute_key(key)
         if k and (k in src or src == k):
             for cat in cats or []:
                 if item_is_category(item, cat):
