@@ -4,6 +4,7 @@ import re
 import calendar
 import json
 import html
+import hashlib
 import time
 from datetime import datetime, timedelta, timezone
 import random
@@ -13,7 +14,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-13-0.11"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-13-0.12"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -2555,6 +2556,95 @@ def _resolve_reply_to(item):
         return None
     return (st.get("post_map") or {}).get(rt)
 
+def _item_text_hash(item):
+    """هش پایدار متن خبر (تیتر + پاراگراف‌ها) برای مقایسه‌ی دوباره‌خوانی؛
+    پروکسی و ایموجیِ سرخط جزو متن نیستن، پس چرخش پروکسی هش رو عوض نمی‌کنه."""
+    text = (item.get("title") or "") + "\n" + "\n".join(item.get("paras") or [])
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _record_watch(item, media, full_text, sent_as_caption):
+    """پست تازه‌فرستاده‌شده‌ی تلگرامی رو برای بازبینی همان دور ثبت می‌کنه.
+    فقط منابع تلگرامی. پیام قابل‌ویرایش ذخیره می‌شه:
+    اگه متن با کپشن رفته، همون پیام عکس؛ اگه متن جدا رفته، پیام متن."""
+    st = STATE_REF[0]
+    if st is None or not LAST_TG_IDS:
+        return
+    if not str(item.get("id", "")).startswith("tg:"):
+        return
+    if sent_as_caption:
+        mid, cap = LAST_TG_IDS[0], True
+    elif media and len(full_text) > 1000 and not item.get("short"):
+        mid, cap = LAST_TG_IDS[-1], False   # عکس بدون کپشن + متن جدا؛ پیام متن ویرایش می‌شه
+    else:
+        mid, cap = LAST_TG_IDS[0], False
+    st.setdefault("watch_next", {})[item["id"]] = {"h": _item_text_hash(item), "mid": mid, "cap": cap}
+
+
+RECHECK_WAIT_SEC = 60    # نسخه‌ی ۰.۱۲: بازبینی اول همان دور، این‌قدر ثانیه بعد از ارسال
+RECHECK_WAIT2_SEC = 240   # نسخه‌ی ۰.۱۲: بازبینی دوم، این‌قدر ثانیه بعد از بازبینی اول (جمعاً ۵ دقیقه بعد از ارسال)
+
+
+def _sleep_polling(state, seconds):
+    """می‌خوابه ولی هر ۱۰ ثانیه فرمان‌های ادمین رو هم می‌خونه — با همان حافظه‌ی
+    زنده‌ی دور (نه بارگذاری دوباره)، تا تغییرهای دور از بین نرن. ربات در زمان
+    انتظار بازبینی هم جواب می‌ده."""
+    end = time.time() + seconds
+    while True:
+        left = end - time.time()
+        if left <= 0:
+            break
+        time.sleep(min(POLL_SECONDS, left))
+        try:
+            if process_commands(state):
+                save_state(state)
+        except Exception as ex:
+            print("command poll error:", repr(ex))
+
+
+def recheck_watch(state, tg_feeds, watch):
+    """پست‌های تلگرامی تازه‌فرستاده‌شده‌ی همین دور رو دوباره می‌خونه؛ اگه متن
+    منبع عوض شده بود (صفحه‌ی پیش‌نمایشِ ناقصِ خواندن اول)، همون پست کانال
+    در جاش کامل می‌شه — ویرایش متن یا کپشن، نه پست دوباره و نه تکراری.
+    خبرها سر وقت رفتن و هیچی عقب نمی‌مونه؛ این بازبینی ~۱ دقیقه و دوباره
+    ~۵ دقیقه بعد از ارسال، در همان دور انجام می‌شه. بعد از ویرایش موفق،
+    هش ورودی به متن تازه به‌روز می‌شه تا بازبینی بعدی همان متن رو دوباره
+    ویرایش نکنه."""
+    if not watch:
+        return
+    fresh = {}
+    for _cat, url, _dom in tg_feeds:
+        if not url.startswith("tg:"):
+            continue
+        try:
+            for it in fetch_tg(_cat, url[3:], _dom):
+                fresh[it["id"]] = it
+        except Exception as ex:
+            print("  recheck fetch error:", url, repr(ex))
+    for item_id, w in list(watch.items()):
+        it = fresh.get(item_id)
+        if it is None:
+            continue   # منبع حذف شده یا حالا فیلتر می‌شه؛ پست کانال دست نمی‌خوره
+        if _item_text_hash(it) == w.get("h"):
+            continue   # متن عوض نشده
+        if muted_category_of(state, it):
+            continue
+        mid = w.get("mid")
+        if not mid:
+            continue
+        new_text = build_text(it)
+        if w.get("cap"):
+            if len(new_text) > 1000:
+                print("  recheck skip (caption too long):", it["title"][:40])
+                continue
+            ok = tg("editMessageCaption", message_id=mid, caption=new_text)
+        else:
+            ok = tg("editMessageText", message_id=mid, text=new_text, disable_web_page_preview="true")
+        print(("  recheck edited: " if ok else "  recheck edit FAILED: "), it["title"][:50])
+        if ok:
+            w["h"] = _item_text_hash(it)   # بازبینی بعدی همان متن رو دوباره ویرایش نکنه؛ اگه باز هم رشد کرد، دوباره ویرایش می‌شه
+
+
 def send(item):
     """هر خبر دقیقاً یک پست می‌شه (نسخه‌ی j: هیچ خبری تکه‌تکه نمی‌ره).
     همه‌ی عکس‌ها و فیلم‌های یک خبر با هم در یک پست می‌رن (یک sendMediaGroup).
@@ -2567,6 +2657,7 @@ def send(item):
     LAST_TG_IDS.clear()
     media = media_list(item)
     full_text = build_text(item)  # یک پیام، حداکثر ۴۰۰۰ کاراکتر
+    sent_as_caption = False   # نسخه‌ی ۰.۱۲: برای بازبینی همان دور، پیام قابل‌ویرایش (متن یا کپشن) کدومه؟
     up = str(item.get("id", "")).startswith("tg:")   # تلگرام لینک عکس کانال‌ها رو نمی‌تونه بگیره؛ مستقیم آپلود
     ok = False
     reply_to = _resolve_reply_to(item)
@@ -2580,11 +2671,13 @@ def send(item):
         if len(media) >= 2:
             if send_group(media, caption, up, reply_to):
                 ok = True
+                sent_as_caption = True
             else:
                 print("  media group failed; sending text only (no single-media fallback that drops media)")
                 ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
         elif send_single(media[0][0], media[0][1], caption, up, reply_to):
             ok = True
+            sent_as_caption = True
         else:
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     elif len(full_text) > 1000:
@@ -2603,16 +2696,19 @@ def send(item):
     elif len(media) >= 2:
         if send_group(media, build_text(item, max_len=1000), up, reply_to):
             ok = True
+            sent_as_caption = True
         else:
             print("  media group failed; sending text only (no single-media fallback that drops media)")
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     elif send_single(media[0][0], media[0][1], build_text(item, max_len=1000), up, reply_to):
         ok = True
+        sent_as_caption = True
     else:
         ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     if ok:
         _record_sent_ids()
         _record_post_map(item)
+        _record_watch(item, media, full_text, sent_as_caption)
     return ok
 
 
@@ -3277,6 +3373,18 @@ def run_once():
                 log_rejected(item.get("src", "?"), "خطا در ارسال", item["title"],
                              item["id"][3:] if str(item["id"]).startswith("tg:") else None, LAST_TG_ERROR[0])
             time.sleep(3)
+
+        if run_tg:
+            # نسخه‌ی ۰.۱۲: بازبینی همان دور، دو بار — خبرها سر وقت رفتن؛
+            # ~۱ دقیقه بعد و دوباره ~۵ دقیقه بعد با منبع چک می‌شن و اگه ناقص
+            # بودن، همان پست کامل می‌شه. در فاصله‌ی انتظار هم فرمان‌های ادمین
+            # خونده می‌شن (ربات همان‌جا جواب می‌ده).
+            watch = state.pop("watch_next", {})
+            if watch:
+                _sleep_polling(state, RECHECK_WAIT_SEC)
+                recheck_watch(state, tg_feeds, watch)
+                _sleep_polling(state, RECHECK_WAIT2_SEC)
+                recheck_watch(state, tg_feeds, watch)
 
         # شام خبری (نسخه‌ی i): فقط در همان دوری که «شب بخیر» فرستاده می‌شه،
         # درست قبل از اون — یعنی پیام یکی‌مانده‌به‌آخر. قبلاً ساعت ۲۳:۰۰ به‌تنهایی
