@@ -34,7 +34,7 @@ NEW_WORDS = {"alert": "هشدار", "hot": "داغ", "basketball": "بسکتبا
              "fuel": "سوخت", "housing": "ویلایی", "sheep": "گوسفند",
              "motorcycle": "موتورسواری", "newspaper": "روزنامه‌ای", "drug": "آسپرین",
              "mobile": "موبایلی", "bank": "بانکی", "chart": "نموداری",
-             "chart_up": "صعودی", "chart_down": "نزولی", "un": "مللی"}
+             "chart_up": "صعودی", "chart_down": "نزولی", "un": "مللی", "otter": "سموری"}
 
 # ---- 1. version / basics ----
 check("version is 0.03", bot.BOT_VERSION == "2026-11-13-0.03", bot.BOT_VERSION)
@@ -127,7 +127,7 @@ def decide_title(title):
 EXPECT = {"alert": ("🚨", "🔻"), "hot": ("🔥", "🔻"), "basketball": ("🏀", "🔹"),
           "volleyball": ("🏐", "🔹"), "game": ("🎮", "🔹"), "jet": ("🛩", "🔹"),
           "fuel": ("⛽️", "🔹"), "housing": ("🏘️", "🔸"), "sheep": ("🐑", "🔹"),
-          "un": ("🇺🇳", "🔹")}
+          "un": ("🇺🇳", "🔹"), "otter": ("🦦", "🔹")}
 for key, (emoji, marker) in EXPECT.items():
     got = decide_title(f"{NEW_WORDS[key]} خبر جدید")
     check(f"decide {key} word → {emoji}", got == (emoji, marker), got)

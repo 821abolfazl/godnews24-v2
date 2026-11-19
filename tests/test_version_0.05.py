@@ -155,7 +155,7 @@ ALL_WORDS = {"red": "سرخط", "yellow": "بورسی", "blue": "مدرسه‌ا
              "fuel": "سوخت", "housing": "ویلایی", "sheep": "گوسفند",
              "motorcycle": "موتورسواری", "newspaper": "روزنامه‌ای", "drug": "آسپرین",
              "mobile": "موبایلی", "bank": "بانکی", "chart": "نموداری",
-             "chart_up": "صعودی", "chart_down": "نزولی", "un": "مللی"}
+             "chart_up": "صعودی", "chart_down": "نزولی", "un": "مللی", "otter": "سموری"}
 ok_add = True
 for emoji, key in bot.EMOJI_CATEGORY_KEYS.items():
     sent.clear()
