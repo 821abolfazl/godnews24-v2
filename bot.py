@@ -14,7 +14,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-19-0.16"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-19-0.17"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1972,6 +1972,21 @@ def _pending_media(msg):
     return None, None
 
 
+def _send_caption(text):
+    """کپشنِ /send: متن کاربر (escapeشده) + پروکسی (لینک روی کلمه‌ی «پروکسی»)
+    + @GodNews24 آخر کپشن؛ اگه متن خودش با @GodNews24 تموم شده باشه، اول اون رو
+    برمی‌داریم و پروکسی + @GodNews24 رو اضافه می‌کنیم تا پروکسی جا نمونه."""
+    text = (text or "").rstrip()
+    if text.endswith(CHANNEL):
+        text = text[: -len(CHANNEL)].rstrip()
+    p_html = proxy_parts()[0]
+    tail = []
+    if "://" in p_html:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
+        tail.append(p_html)
+    tail.append(CHANNEL)
+    return "\n\n".join(x for x in (html.escape(text), "\n".join(tail)) if x)
+
+
 def send_media_to_channel(state, kind, file_id, caption):
     """عکس/ویدیوی ادمین رو با همون قاعده‌ی /send متنی به کانال می‌فرسته:
     پروکسی (لینک روی کلمه‌ی «پروکسی») و @GodNews24 آخر کپشن؛ اگه کپشن خودش با
@@ -1984,17 +1999,7 @@ def send_media_to_channel(state, kind, file_id, caption):
     # کپشن با HTML فرستاده می‌شه تا لینک پروکسی روی خود کلمه‌ی «پروکسی» بشینه
     # (مثل پست‌های عادی خبر)، نه اینکه آدرس کامل لینک دیده بشه؛ متن کاربر
     # escape می‌شه تا «<» و «&» توی کپشن، HTML رو خراب نکنه.
-    text = (caption or "").rstrip()
-    if text.endswith(CHANNEL):
-        # کاربر خودش @GodNews24 رو آخر کپشن گذاشته؛ اول برش می‌داریم و
-        # پروکسی + @GodNews24 رو مثل همیشه اضافه می‌کنیم تا پروکسی جا نمونه.
-        text = text[: -len(CHANNEL)].rstrip()
-    p_html = proxy_parts()[0]
-    tail = []
-    if "://" in p_html:   # فقط وقتی لینک پروکسی واقعی هست؛ وگرنه خط پروکسی رد می‌شه
-        tail.append(p_html)
-    tail.append(CHANNEL)
-    full = "\n\n".join(x for x in (html.escape(text), "\n".join(tail)) if x)
+    full = _send_caption(caption)
     method, field = ("sendVideo", "video") if kind == "video" else ("sendPhoto", "photo")
     LAST_TG_IDS.clear()
     old_mode = PARSE_MODE[0]
@@ -2020,6 +2025,49 @@ def send_media_to_channel(state, kind, file_id, caption):
         admin_send(f"✅ فرستاده شد. message_id: {ids[-1] if ids else '—'}")
     else:
         admin_send(f"❌ ارسال نشد. {LAST_TG_ERROR[0]}")
+
+
+def send_album_to_channel(state, items, caption):
+    """آلبوم /send ادمین (چند عکس/ویدیو با یک کپشن) رو با یک sendMediaGroup به کانال
+    می‌فرسته؛ کپشن با همون قاعده‌ی /send تکی (پروکسی + @GodNews24) روی اولین رسانه
+    می‌شینه؛ اگه کپشن از ۱۰۲۴ حرف بیشتر شد، رسانه‌ها بدون کپشن می‌رن و متن کامل
+    جدا فرستاده می‌شه. همه‌ی آیدی‌ها برای /delete ذخیره می‌شن."""
+    items = list(items or [])[:10]
+    if not items:
+        admin_send("❌ فایل رسانه پیدا نشد؛ دوباره بفرست.")
+        return
+    full = _send_caption(caption)
+    LAST_TG_IDS.clear()
+    old_mode = PARSE_MODE[0]
+    PARSE_MODE[0] = "HTML"
+    try:
+        if len(full) <= 1024:
+            ok = send_group(items, full)
+        else:
+            ok = send_group(items, "")
+            if ok:
+                ok = tg("sendMessage", text=full, disable_web_page_preview="true")
+    finally:
+        PARSE_MODE[0] = old_mode
+    if ok:
+        ids = list(LAST_TG_IDS)
+        if ids:
+            state["last_post_ids"] = ids[-10:]
+            state["last_post"] = time.time()
+            try:
+                save_state(state)
+            except Exception:
+                pass
+        admin_send(f"✅ فرستاده شد. message_id: {ids[0] if ids else '—'} ({len(items)} رسانه)")
+    else:
+        admin_send(f"❌ ارسال نشد. {LAST_TG_ERROR[0]}")
+
+
+def _flush_send_album(state, album):
+    """آلبوم جمع‌شده‌ی /send رو می‌فرسته؛ album برابر None یا خالی باشه کاری نمی‌کنه."""
+    if not album or not album.get("items"):
+        return
+    send_album_to_channel(state, album["items"], album.get("caption") or "")
 
 def handle_command(state, cmd, full_text=""):
     full_text = full_text or cmd
@@ -2316,6 +2364,8 @@ def process_commands(state):
         print("getUpdates failed:", str(data)[:120])
         return False
     changed = False
+    album = None  # آلبوم /send در حال جمع‌شدن: {"gid", "items": [(kind, fid)], "caption"}
+    album_send = False  # یک بار /send برای آلبوم‌های پشت‌سرهمِ یک بسته کافیه
     for u in data.get("result", []):
         state["tg_offset"] = u["update_id"] + 1
         changed = True
@@ -2336,6 +2386,39 @@ def process_commands(state):
             state["menu_pending"] = None
             state.pop("menu_pending_ts", None)
             pending = None
+        # آلبوم /send: عکس/ویدیوهای یک media_group_id رو کنار هم جمع می‌کنیم و
+        # آخرِ گروه با یک sendMediaGroup می‌فرستیم؛ وگرنه فقط عکس اول می‌رفت و
+        # بقیه بی‌صدا رد می‌شدن (گزارش ۱۷:۵۸، آلبوم ۷ عکسی سحابی‌ها).
+        # یک بار /send برای آلبوم‌های پشت‌سرهمِ یک بسته کافیه؛ پیام متنی زنجیره رو می‌شکنه.
+        mgid = msg.get("media_group_id")
+        if fid and mgid:
+            if album is not None and mgid != album["gid"]:
+                _flush_send_album(state, album)
+                album = None
+            _f = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+            is_send = album_send or (pending == "/send") or (_f == "/send")
+            if album is None and is_send:
+                # /send در حال انجامه: pending رو برای کل آلبوم مصرف می‌کنیم، نه فقط عکس اول
+                state["menu_pending"] = None
+                state.pop("menu_pending_ts", None)
+                album_send = True
+                if _f == "/send":
+                    cap = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+                else:
+                    cap = text
+                album = {"gid": mgid, "items": [(kind, fid)], "caption": cap}
+                continue
+            if album is not None and mgid == album["gid"]:
+                album["items"].append((kind, fid))
+                if not album["caption"] and text:
+                    album["caption"] = text
+                continue
+            # آلبوم بدون /send: مثل قبل، با مسیر عادی (بی‌صدا رد می‌شه)
+        else:
+            if album is not None:
+                _flush_send_album(state, album)
+                album = None
+            album_send = False
         if text in ("لغو", "❌ لغو"):
             if pending:
                 state["menu_pending"] = None
@@ -2372,6 +2455,8 @@ def process_commands(state):
                 handle_command(state, cmd, cmd + " " + text)
         elif text.startswith("/"):
             handle_command(state, first, text)
+    if album is not None:
+        _flush_send_album(state, album)
     return changed
 
 
@@ -2556,6 +2641,14 @@ def send_group(media, caption, upload_first=False, reply_to=None):
             arr.append(first_caption({"type": k, "media": f"attach://{fname}"}, not arr))
         if len(arr) >= 2:
             return tg("sendMediaGroup", files=files, media=json.dumps(arr), **rep)
+        if len(arr) == 1:
+            # فقط یکی از رسانه‌ها قابل دانلود بود: همون یکی رو تنها با کپشن
+            # می‌فرستیم تا خبر کاملاً بدون عکس نمونه (قبلاً کل گروه به متن تنها می‌افتاد).
+            one = arr[0]
+            fname = one["media"][len("attach://"):]
+            method, field = ("sendVideo", "video") if one["type"] == "video" else ("sendPhoto", "photo")
+            cap = {"caption": one["caption"]} if one.get("caption") else {}
+            return tg(method, files={field: files[fname]}, **cap, **rep)
         return False
 
     for attempt in ((by_upload, by_url) if upload_first else (by_url, by_upload)):
@@ -2601,6 +2694,13 @@ def _item_text_hash(item):
     پروکسی و ایموجیِ سرخط جزو متن نیستن، پس چرخش پروکسی هش رو عوض نمی‌کنه."""
     text = (item.get("title") or "") + "\n" + "\n".join(item.get("paras") or [])
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _record_media_failed(item):
+    """خبر رسانه داشت ولی فقط متنش رفت (ارسال رسانه شکست خورد) — مثل بقیه‌ی
+    خطاهای ارسال ثبت می‌شه تا در /errors (و شمار «خطا» در /status) دیده بشه؛
+    قبلاً فقط توی لاگ چاپ می‌شد و هیچ‌جا نمی‌موند."""
+    log_rejected(item.get("src") or "", "خطا در ارسال رسانه", item.get("title") or "")
 
 
 def _record_watch(item, media, full_text, sent_as_caption):
@@ -2700,6 +2800,7 @@ def send(item):
     sent_as_caption = False   # نسخه‌ی ۰.۱۲: برای بازبینی همان دور، پیام قابل‌ویرایش (متن یا کپشن) کدومه؟
     up = str(item.get("id", "")).startswith("tg:")   # تلگرام لینک عکس کانال‌ها رو نمی‌تونه بگیره؛ مستقیم آپلود
     ok = False
+    media_sent = False   # نسخه‌ی ۰.۱۷: اگه رسانه نرفت و فقط متن رفت، ثبت می‌شه تا در /status دیده بشه
     reply_to = _resolve_reply_to(item)
     rep = {"reply_to_message_id": reply_to} if reply_to else {}
     if not media:
@@ -2712,12 +2813,14 @@ def send(item):
             if send_group(media, caption, up, reply_to):
                 ok = True
                 sent_as_caption = True
+                media_sent = True
             else:
                 print("  media group failed; sending text only (no single-media fallback that drops media)")
                 ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
         elif send_single(media[0][0], media[0][1], caption, up, reply_to):
             ok = True
             sent_as_caption = True
+            media_sent = True
         else:
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     elif len(full_text) > 1000:
@@ -2725,11 +2828,13 @@ def send(item):
         # (کپشن تلگرام بیشتر از ۱۰۲۴ کاراکتر نمی‌گیره؛ خود خبر تکه نمی‌شه)
         if len(media) >= 2:
             if send_group(media, "", up, reply_to):
+                media_sent = True
                 ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
             else:
                 print("  media group failed; sending text only (no single-media fallback that drops media)")
                 ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
         elif send_single(media[0][0], media[0][1], "", up, reply_to):
+            media_sent = True
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true")
         else:
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
@@ -2737,18 +2842,22 @@ def send(item):
         if send_group(media, build_text(item, max_len=1000), up, reply_to):
             ok = True
             sent_as_caption = True
+            media_sent = True
         else:
             print("  media group failed; sending text only (no single-media fallback that drops media)")
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     elif send_single(media[0][0], media[0][1], build_text(item, max_len=1000), up, reply_to):
         ok = True
         sent_as_caption = True
+        media_sent = True
     else:
         ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
     if ok:
         _record_sent_ids()
         _record_post_map(item)
         _record_watch(item, media, full_text, sent_as_caption)
+        if media and not media_sent:
+            _record_media_failed(item)
     return ok
 
 
