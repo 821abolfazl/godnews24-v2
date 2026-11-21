@@ -14,7 +14,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-21-0.19"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-21-0.20"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -1809,9 +1809,9 @@ HELP_TEXT = ("دستورها:\n/status ← وضعیت لحظه‌ای و پست 
              "/errors ← پست‌هایی که امروز ارسالشون خطا داد\n"
              "/test ← بررسی دسترسی ربات به کانال و نمونه‌ی قالب پست\n"
              "/send متن یا عکس ← ارسال خبر دلخواه (متن یا عکس/ویدیو) به کانال\n/delete ← پاک کردن آخرین پست ربات\n"
-             "/mute منبع [دسته] ← بی‌صدا کردن موقت یک منبع یا فقط یک دسته از آن (سیاسی، اقتصادی، ورزشی)\n/unmute منبع [دسته] ← برگردوندن منبع یا یک دسته\n/muted ← لیست منبع‌ها و دسته‌های بی‌صدا\n"
+             "/mute منبع [دسته] ← بی‌صدا کردن موقت یک منبع یا فقط یک دسته از آن (سیاسی، اقتصادی، ورزشی)\n/unmute منبع [دسته] ← برگردوندن منبع یا یک دسته\n"
              "/stats ← آمار ۷ روز اخیر\n"
-             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/add 🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|🏐|🎮|🛩|⛽️|🏘️|🐑|🏍️|📰|💊|📱|🏦|📊|📈|📉|🇺🇳|🦦 کلمه ← اضافه کردن کلمه به ایموجی\n/marker ایموجی اول ... ایموجی پاراگراف ← تنظیم نشانه‌ی پاراگراف؛ برای چند ایموجی همزمان: /marker ⚽ 🥩 🔻 (فقط ایموجی اول ← برگشت به پیش‌فرض)\n/remove ایموجی کلمه ← حذف کلمه از ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
+             "صبحانه خبری (پست کیوسک، حدود ساعت ۱۰:۰۰) و شام خبری ساعت ۲۳:۰۰ خودکار فرستاده می‌شن؛ هر شب بعد از شام خبری و قبل از شب بخیر، پیام حمایت از کانال هم فرستاده می‌شه\n/rules ← لیست قوانین فعلی\n/block کلمه ← اضافه کردن کلمه به ممنوع\n/unblock کلمه ← حذف کلمه از ممنوع\n/add 🔴|🟡|🔵|⚽|🤖|✈️|🚙|🥩|🍗|🚨|🔥|🏀|🏐|🎮|🛩|⛽️|🏘️|🐑|🏍️|📰|💊|📱|🏦|📊|📈|📉|🇺🇳|🦦 کلمه ← اضافه کردن کلمه به ایموجی\n/marker ایموجی اول ... ایموجی پاراگراف ← تنظیم نشانه‌ی پاراگراف؛ برای چند ایموجی همزمان: /marker ⚽ 🥩 🔻 (فقط ایموجی اول ← برگشت به پیش‌فرض)\n/remove ایموجی کلمه ← حذف کلمه از ایموجی\n/strip عبارت ← اضافه کردن عبارت به پاک‌شونده‌های آخر متن\n/unstrip عبارت ← حذف عبارت از پاک‌شونده‌های آخر متن\n/menu ← نمایش منوی دکمه‌ای")
 
 
 # ====== منوی دکمه‌ای (ReplyKeyboard) در چت خصوصی ادمین ======
@@ -1823,7 +1823,7 @@ MENU_BUTTONS = [
     ("🚫 ردشده‌ها", "/skipped"),
     ("⚠️ خطاها", "/errors"),
     ("✉️ ارسال خبر", "/send"),
-    ("🔇 بی‌صداها", "/muted"),
+    ("🔓 حذف از مسدودها", "/unblock"),
     ("🚫 مسدود کردن", "/block"),
     ("🔕 بی‌صدا کردن", "/mute"),
     ("🔔 برگردوندن منبع", "/unmute"),
@@ -1847,6 +1847,7 @@ MENU_PROMPTS = {
     "/mute": chr(10).join(["اسم منبع رو بفرست (مثلاً AloNews).", "برای بی‌صدا کردن فقط یه دسته، «منبع دسته» بفرست (مثلاً euronews سیاسی).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/unmute": chr(10).join(["اسم منبعی که می‌خوای برگرده رو بفرست (مثلاً AloNews).", "برای برگردوندن فقط یه دسته، «منبع دسته» بفرست (مثلاً euronews سیاسی).", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/block": chr(10).join(["کلمه‌ی ممنوع رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
+    "/unblock": chr(10).join(["کلمه‌ی ممنوعی که می‌خوای حذف بشه رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/add": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗🚨🔥🏀🏐🎮🛩⛽️🏘️🐑🏍️📰💊📱🏦📊📈📉🇺🇳🦦)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/remove": chr(10).join(["ایموجی و کلمه رو بفرست، مثلاً: 🔴 کلمه  یا  ⚽ کلمه (ایموجی‌ها: 🔴🟡🔵⚽🤖✈️🚙🥩🍗🚨🔥🏀🏐🎮🛩⛽️🏘️🐑🏍️📰💊📱🏦📊📈📉🇺🇳🦦)", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
     "/marker": chr(10).join(["ایموجی اول و ایموجی پاراگراف رو بفرست، مثلاً: 🔴 🔻  یا  ⚽ 🥩 🔻 (برای چند ایموجی همزمان، همه رو بنویس و نشانه رو آخر بذار)", "برای برگشت به پیش‌فرض فقط ایموجی اول رو بفرست.", "برای لغو «لغو» رو بفرست یا /menu رو بزن."]),
@@ -1859,7 +1860,7 @@ MENU_PENDING_TIMEOUT = 600  # ثانیه؛ اگه ادمین تا این مدت 
 # متنی که با «/» شروع می‌شه ولی دستور نیست (مثلاً «/ ایسنا») آرگومان حساب بشه.
 KNOWN_COMMANDS = {"/start", "/help", "/menu", "/status", "/stats", "/rules",
                   "/block", "/add", "/marker", "/remove", "/strip", "/unstrip", "/send", "/delete",
-                  "/mute", "/unmute", "/muted", "/skipped", "/errors", "/ads",
+                  "/mute", "/unmute", "/unblock", "/skipped", "/errors", "/ads",
                   "/pause", "/resume", "/test"}
 
 def menu_keyboard():
@@ -2137,6 +2138,19 @@ def handle_command(state, cmd, full_text=""):
             except Exception as ex:
                 print("save rules error:", ex)
             admin_send(f"✅ «{w}» به ممنوع اضافه شد.")
+    elif cmd == "/unblock":
+        w = arg.strip()
+        if not w:
+            admin_send("کلمه را هم بفرست. مثال: /unblock کلمه")
+        elif not any((x or "").strip() == w for x in DYNAMIC_RULES.get("blocked", [])):
+            admin_send(f"«{w}» در ممنوع نیست.")
+        else:
+            DYNAMIC_RULES["blocked"] = [x for x in DYNAMIC_RULES.get("blocked", []) if (x or "").strip() != w]
+            try:
+                save_rules_file(); commit_rules()
+            except Exception as ex:
+                print("save rules error:", ex)
+            admin_send(f"✅ «{w}» از ممنوع حذف شد.")
     elif cmd == "/add":
         toks = arg.split(None, 1)
         if len(toks) < 2 or _norm_emoji(toks[0]) not in EMOJI_CATEGORY_KEYS:
@@ -2348,17 +2362,6 @@ def handle_command(state, cmd, full_text=""):
             else:
                 state["muted_sources"] = new_muted
                 admin_send(f"🔊 «{canon}» برگشت.")
-    elif cmd == "/muted":
-        muted = state.get("muted_sources") or []
-        _mc = state.get("muted_categories") or {}
-        _lines = ["🔇 منبع‌های بی‌صدا: " + ("، ".join(muted) if muted else "هیچ‌کدام")]
-        if _mc:
-            _cat_lines = []
-            for _k in sorted(_mc):
-                _names = "، ".join(CATEGORY_NAMES.get(c, c) for c in sorted(_mc[_k]))
-                _cat_lines.append(f"{_k}: {_names}")
-            _lines.append("🔇 دسته‌های بی‌صدا: " + "؛ ".join(_cat_lines))
-        admin_send("\n".join(_lines))
     elif cmd in ("/ads", "/errors", "/skipped"):
         for chunk in rejected_text(state, cmd[1:]):
             admin_send(chunk)
