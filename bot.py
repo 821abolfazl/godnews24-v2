@@ -14,7 +14,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-21-0.18"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-21-0.19"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -133,6 +133,10 @@ SRC = (r"(?:CNN|سی\s?ان\s?ان|شبکه\s?(?:خبری\s?)?کان|صابری�
 AG = r"(?:خبرگزاری\s+|پایگاه\s+خبری\s+|سایت\s+|روزنامه\s+|خبرنگار\s+|سرویس\s+\S+\s+)?"
 
 SOURCE_RULES = [
+    # نسخه‌ی ۰.۱۹: «منبع:» فقط وقتی آخر متن و بعدش نام یک منبع شناخته‌شده‌ست پاک می‌شه؛
+    # قبلاً «منبع:» وسط جمله (مثل «به نقل از یک منبع: فرماندهی...») تا آخر متن را می‌خورد (پست FT در ۲۰۲۶-۱۱-۲۱).
+    # این قانون اول لیست است تا «خبرگزاری فارس» در «منبع: خبرگزاری فارس» پیش از آن خورده نشود.
+    re.compile(r"منبع\s*:\s*(?:" + AG + SRC + r")[\s،,:؛\-–—.!؟]*$"),
     re.compile(r"\s*/\s*ایسنا(?=[\s.،]*$)"),   # «... / ایسنا» آخر متن: فقط همین کلمه پاک می‌شه (نقطه‌ی بعدش می‌مونه)
     re.compile(r"(?:به\s+گزارش|به\s+نقل\s+از|بنا\s?بر\s+گزارش|طبق\s+گزارش|بر\s?اساس\s+گزارش)\s+"
                + AG + SRC + r"[\s،,:؛\-–—]*"),
@@ -140,7 +144,7 @@ SOURCE_RULES = [
     re.compile(r"^\s*" + AG + SRC + r"\s*[:\-–—ـ]\s*"),
     re.compile(r"[\(\[]\s*" + AG + SRC + r"\s*[\)\]]"),
     re.compile(r"\s*[|\-–—]\s*" + AG + SRC + r"\s*$"),
-    re.compile(r"(?:منبع\s*:|انتهای\s+پیام|ادامه\s+مطلب|بیشتر\s+بخوانید).*$", re.S),
+    re.compile(r"(?:انتهای\s+پیام|ادامه\s+مطلب|بیشتر\s+بخوانید).*$", re.S),
     re.compile(r"https?://\S+"),
 ]
 
@@ -203,6 +207,31 @@ def clean_paras(raw, limit=12000):
     return paras
 
 
+def _title_and_paras(lines):
+    """تیتر و پاراگراف‌ها از خط‌های تمیز خبر تلگرامی.
+    نسخه‌ی ۰.۱۹: اگه خط اول از ۲۰۰ کاراکتر بلندتر بود، دنباله‌اش پاراگراف
+    می‌شه تا ته خبر دور ریخته نشه (پست FT در ۲۰۲۶-۱۱-۲۱: کل خبر در یک خط بود)؛
+    اگه دنباله فقط یک کلمه‌ست، همان تیتر کامل می‌شه."""
+    rest = lines[1:]
+    first_clean = clean(lines[0], 100000)
+    title = first_clean
+    tail = ""
+    if len(first_clean) > 200:
+        title = first_clean[:200].rsplit(" ", 1)[0]
+        tail = first_clean[len(title):].strip(" ،؛:—-")
+        if len(tail) < 6:
+            title = first_clean   # دنباله فقط یک کلمه‌ست؛ تیتر کامل می‌شه
+            tail = ""
+    if len(lines) > 1 and len(lines[0].split()) <= 2:   # مثلاً «فوری»: تیتر واقعی خط بعدیه
+        title = clean(lines[0] + " " + lines[1], 200)
+        rest = lines[2:]
+        tail = ""
+    elif tail:
+        rest = [tail] + rest
+    paras = [x for x in clean_paras("\n".join(rest), 12000) if x != title]
+    return title, paras
+
+
 # ====== نفت و پرچم کشورها ======
 def is_oil_price(title):
     has_oil = any(k in title for k in ["نفت", "برنت", "WTI"])
@@ -261,6 +290,8 @@ NOT_COUNTRY = ["ایران خودرو", "ایران‌خودرو", "ایرانخ
                "آذربایجان شرقی", "آذربایجان غربی", "خلیج فارس", "تنگه هرمز", "روس‌تا"]
 FLAG_FILLERS = {"فوری", "عاجل", "خبر", "آخرین", "مهم", "جدید", "اختصاصی", "ویدیو", "ویدئو", "عکس", "تصاویر", "گزارش"}
 FLAG_WORDS = 8   # کشور باید توی ۸ کلمه‌ی اولِ تیتر باشه (بعد از حذف کلمه‌های «فوری»، «خبر» و مانند اون)
+CABLE_WORDS = ["برق", "برقی", "مسی", "فیبر", "اینترنت", "اینترنتی",
+               "مخابرات", "مخابراتی", "فشار"]   # نسخه‌ی ۰.۱۹: «کابل» کنار این‌ها کابل برق است، نه کابلِ افغانستان
 
 
 def flag_of(code):
@@ -281,8 +312,13 @@ def flags_for(title, limit=3):
     found = []
     for code, rxc in COUNTRY_RE:
         m = rxc.search(s8)
-        if m:
-            found.append((m.start(), code))
+        if not m:
+            continue
+        if code == "AF" and "کابل" in m.group(0):
+            near = s8[:m.start()].split()[-1:] + s8[m.end():].split()[:1]
+            if any(w in CABLE_WORDS for w in near):
+                continue   # «کابل‌های برق» کابل برق است، نه پایتخت افغانستان (گزارش ۲۰۲۶-۱۱-۲۱)
+        found.append((m.start(), code))
     m = EU_RE.search(s6)   # اروپا فقط توی ۶ کلمه‌ی اول
     if m:
         found.append((m.start(), "EU"))
@@ -1093,12 +1129,7 @@ def fetch_tg(category, name, domestic):
                 lines = strip_end_source([l for l in text.split("\n") if l.strip()])
                 if not lines or len(text) < 15:
                     continue
-                rest = lines[1:]
-                title = clean(lines[0], 200)
-                if len(lines) > 1 and len(lines[0].split()) <= 2:   # مثلاً «فوری»: تیتر واقعی خط بعدیه
-                    title = clean(lines[0] + " " + lines[1], 200)
-                    rest = lines[2:]
-                paras = [x for x in clean_paras("\n".join(rest), 12000) if x != title]
+                title, paras = _title_and_paras(lines)
             if not title:
                 continue
             if name in POLITICAL_SKIP_CHANNELS and not kind and is_political(title + " " + (paras[0] if paras else "")):
@@ -1490,7 +1521,7 @@ def build_text(item, max_len=4000):
                 parts += tail
                 return "\n\n".join(parts)
             text = assemble_q(quoted)
-            while len(text) > max_len and quoted:
+            while len(plain_of(text)) > max_len and quoted:   # نسخه‌ی ۰.۱۹: سقف روی متنِ دیده‌شده‌ست، نه HTML (لینک پروکسی ۲۴۵ کاراکتری جزو سقف نیست)
                 quoted.pop()   # اول از آخرِ نقل‌قول کم می‌شه؛ تیتر همیشه می‌مونه
                 text = assemble_q(quoted)
             return text
@@ -1501,7 +1532,7 @@ def build_text(item, max_len=4000):
             body = [f"{marker} {esc(p)}" if mark else esc(p) for p in ps]
         return "\n\n".join([first] + body + tail)
     text = assemble(paras)
-    while len(text) > max_len and paras:
+    while len(plain_of(text)) > max_len and paras:   # نسخه‌ی ۰.۱۹: سقف روی متنِ دیده‌شده‌ست، نه HTML
         paras.pop()
         text = assemble(paras)
     return text
@@ -2741,11 +2772,12 @@ def _record_watch(item, media, full_text, sent_as_caption):
         mid, cap = LAST_TG_IDS[-1], False   # عکس بدون کپشن + متن جدا؛ پیام متن ویرایش می‌شه
     else:
         mid, cap = LAST_TG_IDS[0], False
-    st.setdefault("watch_next", {})[item["id"]] = {"h": _item_text_hash(item), "mid": mid, "cap": cap}
+    st.setdefault("watch_next", {})[item["id"]] = {"h": _item_text_hash(item), "mid": mid, "cap": cap, "t0": time.time()}
 
 
 RECHECK_WAIT_SEC = 60    # نسخه‌ی ۰.۱۲: بازبینی اول همان دور، این‌قدر ثانیه بعد از ارسال
 RECHECK_WAIT2_SEC = 240   # نسخه‌ی ۰.۱۲: بازبینی دوم، این‌قدر ثانیه بعد از بازبینی اول (جمعاً ۵ دقیقه بعد از ارسال)
+WATCH_TTL_SEC = 3600   # نسخه‌ی ۰.۱۹: بازبینی ماندگار — خبر تا یک ساعت بعد از ارسال در دورهای بعدی هم بازبینی می‌شه
 
 
 def _sleep_polling(state, seconds):
@@ -2797,7 +2829,7 @@ def recheck_watch(state, tg_feeds, watch):
             continue
         new_text = build_text(it)
         if w.get("cap"):
-            if len(new_text) > 1000:
+            if len(plain_of(new_text)) > 1000:   # نسخه‌ی ۰.۱۹: سقف کپشن روی متنِ دیده‌شده‌ست
                 print("  recheck skip (caption too long):", it["title"][:40])
                 continue
             ok = tg("editMessageCaption", message_id=mid, caption=new_text)
@@ -2806,6 +2838,20 @@ def recheck_watch(state, tg_feeds, watch):
         print(("  recheck edited: " if ok else "  recheck edit FAILED: "), it["title"][:50])
         if ok:
             w["h"] = _item_text_hash(it)   # بازبینی بعدی همان متن رو دوباره ویرایش نکنه؛ اگه باز هم رشد کرد، دوباره ویرایش می‌شه
+
+
+def _stash_long_watch(state, watch):
+    """بازبینی ماندگار (نسخه‌ی ۰.۱۹): خبرهایی که در بازبینی همان دور کامل نشدن،
+    تا یک ساعت در دورهای بعدی هم بازبینی می‌شن؛ پیش‌نمایش ناقصِ بیشتر از
+    ۵ دقیقه و ویرایش دیرهنگام منبع این‌طور درست می‌شه (گزارش ۲۰۲۶-۱۱-۲۱:
+    پست فایننشال تایمز در هر دو بازبینی همان دور هنوز ناقص بود و کامل نشد)."""
+    if not watch:
+        return
+    long_watch = state.get("watch_long", {})
+    long_watch.update(watch)
+    now = time.time()
+    state["watch_long"] = {k: v for k, v in long_watch.items()
+                           if now - v.get("t0", now) < WATCH_TTL_SEC}
 
 
 def send(item):
@@ -2846,7 +2892,7 @@ def send(item):
             media_sent = True
         else:
             ok = tg("sendMessage", text=full_text, disable_web_page_preview="true", **rep)
-    elif len(full_text) > 1000:
+    elif len(plain_of(full_text)) > 1000:   # نسخه‌ی ۰.۱۹: سقف کپشن روی متنِ دیده‌شده‌ست، نه HTML
         # متن طولانی با عکس: اول عکس بدون کپشن، بعد متن کامل در یک پیام جداگانه
         # (کپشن تلگرام بیشتر از ۱۰۲۴ کاراکتر نمی‌گیره؛ خود خبر تکه نمی‌شه)
         if len(media) >= 2:
@@ -2894,7 +2940,8 @@ def deliver(text, media):
     نسخه‌ی j: متن همیشه در یک پیام می‌ره؛ اگه از سقف یک پیام رد شد، فقط از مرز
     پاراگراف جا می‌شه (بدون «…» وسط جمله)."""
     text = _fit_one_message(text)
-    if media and len(text) > 1000:   # کپشن تلگرام حداکثر ۱۰۲۴ کاراکتره: اول عکس، بعد متن
+    if media and len(plain_of(text)) > 1000:   # نسخه‌ی ۰.۱۹: سقف کپشن روی متنِ دیده‌شده‌ست، نه HTML
+        # کپشن تلگرام حداکثر ۱۰۲۴ کاراکتره: اول عکس، بعد متن
         if len(media) >= 2:
             if send_group(media, "", True):
                 return tg("sendMessage", text=text, disable_web_page_preview="true")
@@ -3547,16 +3594,24 @@ def run_once():
             time.sleep(3)
 
         if run_tg:
-            # نسخه‌ی ۰.۱۲: بازبینی همان دور، دو بار — خبرها سر وقت رفتن؛
-            # ~۱ دقیقه بعد و دوباره ~۵ دقیقه بعد با منبع چک می‌شن و اگه ناقص
-            # بودن، همان پست کامل می‌شه. در فاصله‌ی انتظار هم فرمان‌های ادمین
-            # خونده می‌شن (ربات همان‌جا جواب می‌ده).
+            # نسخه‌ی ۰.۱۹: اول بازبینی ماندگار دورهای قبل (بدون خواب اضافه)،
+            # بعد بازبینی همان دور، دو بار — خبرها سر وقت رفتن؛ ~۱ دقیقه بعد
+            # و دوباره ~۵ دقیقه بعد با منبع چک می‌شن و اگه ناقص بودن، همان
+            # پست کامل می‌شه. در فاصله‌ی انتظار هم فرمان‌های ادمین خونده می‌شن
+            # (ربات همان‌جا جواب می‌ده).
+            long_watch = state.get("watch_long", {})
+            if long_watch:
+                recheck_watch(state, tg_feeds, long_watch)
+                now = time.time()
+                state["watch_long"] = {k: v for k, v in long_watch.items()
+                                       if now - v.get("t0", now) < WATCH_TTL_SEC}
             watch = state.pop("watch_next", {})
             if watch:
                 _sleep_polling(state, RECHECK_WAIT_SEC)
                 recheck_watch(state, tg_feeds, watch)
                 _sleep_polling(state, RECHECK_WAIT2_SEC)
                 recheck_watch(state, tg_feeds, watch)
+                _stash_long_watch(state, watch)
 
         # شام خبری (نسخه‌ی i): فقط در همان دوری که «شب بخیر» فرستاده می‌شه،
         # درست قبل از اون — یعنی پیام یکی‌مانده‌به‌آخر. قبلاً ساعت ۲۳:۰۰ به‌تنهایی
