@@ -14,7 +14,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-19-0.17"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-21-0.18"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -2522,22 +2522,45 @@ def tg(method, files=None, **data):
         data["parse_mode"] = PARSE_MODE[0]
     url = f"https://api.telegram.org/bot{TOKEN}/{method}"
     timeout = (10, 60 if files else 30)
-    try:
-        r = requests.post(url, data=data, files=files, timeout=timeout)
-        if r.status_code == 429:  # محدودیت سرعت تلگرام: صبر و یک بار تلاش دوباره
+    # نسخه‌ی ۰.۱۸: تلاش دوباره برای خطاهای گذرا — ۲۱:۱۹ و ۲۱:۲۰ دیشب هر دو عکس
+    # AloNews اول با ReadTimeout در آپلود و بعد با 400 «failed to get HTTP URL
+    # content» در ارسال با لینک شکست خوردند و فقط متن رفت. هر دو گذرا بودند؛
+    # پس هر کدوم یک بار دیگر (بعد از ۵ ثانیه) تلاش می‌شه. بقیه‌ی 400ها (مثلاً
+    # فایل اشتباه یا چت نامعتبر) تلاش دوباره نمی‌شن. سقف تلاش‌ها ۴ پست است.
+    net_retried = False   # یک بار تلاش دوباره روی خطای شبکه (تایم‌اوت/قطع)
+    url_retried = False   # یک بار تلاش دوباره روی 400 گرفتن لینک رسانه
+    rate_retried = False  # یک بار تلاش دوباره روی 429 (مثل قبل)
+    r = None
+    while True:
+        try:
+            r = requests.post(url, data=data, files=files, timeout=timeout)
+        except requests.RequestException as ex:   # قطعی/کندیِ شبکه نباید کل اجرا رو خراب کنه
+            if net_retried:
+                print("  telegram network error:", method, type(ex).__name__)
+                LAST_TG_ERROR[0] = f"{method}: {type(ex).__name__}"
+                if files:
+                    UPLOAD_FAILS[0] += 1
+                return False
+            net_retried = True
+            print("  telegram network error, retrying once:", method, type(ex).__name__)
+            time.sleep(5)
+            continue
+        if r.status_code == 429 and not rate_retried:  # محدودیت سرعت تلگرام: صبر و یک بار تلاش دوباره
+            rate_retried = True
             RATE_LIMITS[0] += 1
             try:
                 wait = int(r.json().get("parameters", {}).get("retry_after", 5))
             except Exception:
                 wait = 5
             time.sleep(min(wait, 30))
-            r = requests.post(url, data=data, files=files, timeout=timeout)
-    except requests.RequestException as ex:   # قطعی/کندیِ شبکه نباید کل اجرا رو خراب کنه
-        print("  telegram network error:", method, type(ex).__name__)
-        LAST_TG_ERROR[0] = f"{method}: {type(ex).__name__}"
-        if files:
-            UPLOAD_FAILS[0] += 1
-        return False
+            continue
+        if (not r.ok and r.status_code == 400 and not url_retried
+                and "failed to get http url content" in r.text.lower()):
+            url_retried = True
+            print("  telegram could not fetch media URL, retrying once:", method)
+            time.sleep(5)
+            continue
+        break
     if not r.ok:
         print("  telegram error:", method, r.status_code, r.text[:150])
         LAST_TG_ERROR[0] = f"{method} {r.status_code}: {r.text[:80]}"
