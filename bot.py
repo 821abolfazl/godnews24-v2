@@ -14,7 +14,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-21-0.20"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-22-0.21"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -33,6 +33,7 @@ DYNAMIC_RULES_PREV = None  # نسخه‌ی قبلی قوانین، برای ای
 RULES_BLOCKED_SUSPENDED = [False]
 
 STATE_FILE = "posted.json"
+GIT_TIMEOUT_SEC = 60    # سقف زمانی هر دستور گیت؛ اگه گیت هنگ کرد، ربات یخ نمی‌زنه (گیر ۲۰۲۶-۱۱-۲۲: اجرا ۷۰ دقیقه توی انتظار موند و هیچ خطی هم توی لاگ نیومد)
 TG_EVERY_MIN = 20        # کانال‌های تلگرامی: هر ۲۰ دقیقه
 TG_MIN_POSTS = 5         # هر بار بین ۵ تا ۱۰ خبر
 TG_MAX_POSTS = 10
@@ -1435,6 +1436,13 @@ def format_rules_text(rules=None):
         lines.append("")
     return "\n".join(lines).strip() + "\n"
 
+def _clear_git_lock():
+    """اگه گیت وسط کار کشته شد، قفل index.lock می‌مونه و گیت‌های بعدی فوری خطا می‌دن؛ پاکش می‌کنیم تا دور بعدی بتونه ذخیره کنه."""
+    try:
+        os.remove(".git/index.lock")
+    except OSError:
+        pass
+
 def save_rules_file():
     with open(RULES_FILE, "w", encoding="utf-8") as f:
         f.write(format_rules_text())
@@ -1445,17 +1453,32 @@ def commit_rules():
         return
     import subprocess
     def git(*args):
-        return subprocess.run(["git", *args], capture_output=True, text=True)
+        return subprocess.run(["git", *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_SEC)
     try:
-        git("config", "user.name", "news-bot")
-        git("config", "user.email", "bot@users.noreply.github.com")
-        git("pull", "--rebase", "--autostash")
-        git("add", RULES_FILE)
+        _r = git("config", "user.name", "news-bot")
+        if _r.returncode != 0:
+            print("rules git config failed:", (_r.stderr or "")[:200])
+        _r = git("config", "user.email", "bot@users.noreply.github.com")
+        if _r.returncode != 0:
+            print("rules git config failed:", (_r.stderr or "")[:200])
+        _pull = git("pull", "--rebase", "--autostash")
+        if _pull.returncode != 0:
+            print("rules git pull --rebase failed (ignored):", (_pull.stderr or "")[:200])
+        _r = git("add", RULES_FILE)
+        if _r.returncode != 0:
+            print("rules git add failed:", (_r.stderr or "")[:200])
+            return
         if git("diff", "--cached", "--quiet").returncode != 0:
-            git("commit", "-m", "update rules")
+            _r = git("commit", "-m", "update rules")
+            if _r.returncode != 0:
+                print("rules git commit failed:", (_r.stderr or "")[:200])
+                return
             r = git("push")
             if r.returncode != 0:
                 print("rules git push failed:", r.stderr[:200])
+    except subprocess.TimeoutExpired:
+        print(f"commit rules error: git timed out after {GIT_TIMEOUT_SEC}s (ignored)")
+        _clear_git_lock()
     except Exception as ex:
         print("commit rules error:", repr(ex))
 
@@ -3706,22 +3729,38 @@ def commit_state():
     import subprocess
 
     def git(*args):
-        return subprocess.run(["git", *args], capture_output=True, text=True)
+        return subprocess.run(["git", *args], capture_output=True, text=True, timeout=GIT_TIMEOUT_SEC)
 
     try:
-        git("config", "user.name", "news-bot")
-        git("config", "user.email", "bot@users.noreply.github.com")
+        _r = git("config", "user.name", "news-bot")
+        if _r.returncode != 0:
+            print("git config failed:", (_r.stderr or "")[:200])
+        _r = git("config", "user.email", "bot@users.noreply.github.com")
+        if _r.returncode != 0:
+            print("git config failed:", (_r.stderr or "")[:200])
         _pull = git("pull", "--rebase", "--autostash")
         if _pull.returncode != 0:
             print("git pull --rebase failed (ignored):", (_pull.stderr or "")[:200])
-        git("add", STATE_FILE)
+        _r = git("add", STATE_FILE)
+        if _r.returncode != 0:
+            print("git add failed:", (_r.stderr or "")[:200])
+            return
         if os.path.exists(RULES_FILE):
-            git("add", RULES_FILE)
+            _r = git("add", RULES_FILE)
+            if _r.returncode != 0:
+                print("git add failed:", (_r.stderr or "")[:200])
+                return
         if git("diff", "--cached", "--quiet").returncode != 0:
-            git("commit", "-m", "update posted")
+            _r = git("commit", "-m", "update posted")
+            if _r.returncode != 0:
+                print("git commit failed:", (_r.stderr or "")[:200])
+                return
             r = git("push")
             if r.returncode != 0:
                 print("git push failed:", r.stderr[:200])
+    except subprocess.TimeoutExpired:
+        print(f"commit error: git timed out after {GIT_TIMEOUT_SEC}s (ignored)")
+        _clear_git_lock()
     except Exception as ex:
         print("commit error:", repr(ex))
 
