@@ -14,7 +14,7 @@ from urllib.parse import urlparse, parse_qs, unquote
 import feedparser
 
 # ====== تنظیمات ======
-BOT_VERSION = "2026-11-22-0.21"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
+BOT_VERSION = "2026-11-22-0.22"   # توی لاگ و /status نوشته می‌شه تا معلوم باشه کدوم نسخه در حال اجراست
 try:
     sys.stdout.reconfigure(line_buffering=True)   # لاگ همون لحظه توی گیت‌هاب دیده بشه
 except Exception:
@@ -137,13 +137,16 @@ SOURCE_RULES = [
     # نسخه‌ی ۰.۱۹: «منبع:» فقط وقتی آخر متن و بعدش نام یک منبع شناخته‌شده‌ست پاک می‌شه؛
     # قبلاً «منبع:» وسط جمله (مثل «به نقل از یک منبع: فرماندهی...») تا آخر متن را می‌خورد (پست FT در ۲۰۲۶-۱۱-۲۱).
     # این قانون اول لیست است تا «خبرگزاری فارس» در «منبع: خبرگزاری فارس» پیش از آن خورده نشود.
+    # نسخه‌ی ۰.۲۲: ارجاع به منبع فقط آخر متن پاک می‌شه؛ «به گزارش تسنیم، ...» و «تسنیم: ...»
+    # اول خبر دست نمی‌خورد (گزارش ۲۰۲۶-۱۱-۲۲) — قانون‌های «به گزارش/خبرگزاری X» و
+    # «^منبع: ...» منبع اول خبر را هم می‌خوردند، در حالی که قرار بود فقط منبع آخر پست پاک شود؛
+    # قانون «^...» (منبع اول متن) کلاً حذف شد و بقیه به آخر متن لنگر شدند.
     re.compile(r"منبع\s*:\s*(?:" + AG + SRC + r")[\s،,:؛\-–—.!؟]*$"),
     re.compile(r"\s*/\s*ایسنا(?=[\s.،]*$)"),   # «... / ایسنا» آخر متن: فقط همین کلمه پاک می‌شه (نقطه‌ی بعدش می‌مونه)
     re.compile(r"(?:به\s+گزارش|به\s+نقل\s+از|بنا\s?بر\s+گزارش|طبق\s+گزارش|بر\s?اساس\s+گزارش)\s+"
-               + AG + SRC + r"[\s،,:؛\-–—]*"),
-    re.compile(r"(?:خبرنگار|خبرگزاری)\s+" + SRC + r"[\s،,:؛\-–—]*"),
-    re.compile(r"^\s*" + AG + SRC + r"\s*[:\-–—ـ]\s*"),
-    re.compile(r"[\(\[]\s*" + AG + SRC + r"\s*[\)\]]"),
+               + AG + SRC + r"[\s،,:؛\-–—.!؟]*$"),
+    re.compile(r"(?:خبرنگار|خبرگزاری)\s+" + SRC + r"[\s،,:؛\-–—.!؟]*$"),
+    re.compile(r"[\(\[]\s*" + AG + SRC + r"\s*[\)\]][\s،,:؛\-–—.!؟]*$"),
     re.compile(r"\s*[|\-–—]\s*" + AG + SRC + r"\s*$"),
     re.compile(r"(?:انتهای\s+پیام|ادامه\s+مطلب|بیشتر\s+بخوانید).*$", re.S),
     re.compile(r"https?://\S+"),
@@ -175,6 +178,35 @@ def strip_sources(text):
     text = apply_dynamic_strip_end(text)
     text = re.sub(r"\s{2,}", " ", text)
     return text.strip(" \n\t،,:؛-–—")
+
+
+# نسخه‌ی ۰.۲۲: آیدی کانال منبع در /send — «@AloNews» یا لینک «t.me/AloNews/123»
+# (با https یا بدون آن) از متن پاک می‌شه؛ آیدی خود کانال (@GodNews24 و
+# t.me/GodNews24) دست نمی‌خورد چون ربات خودش آن را آخر پست اضافه می‌کند.
+SEND_ID_RES = [
+    re.compile(r"(?<![A-Za-z0-9_.])@(?!(?:GodNews24))[A-Za-z0-9_]{5,}", re.I),
+    re.compile(r"(?:https?://)?(?:t\.me|telegram\.me)/(?!GodNews24)\S+", re.I),
+]
+
+def clean_send_text(text):
+    """متن /send ادمین، خط‌به‌خط مثل پست‌های خودکار تمیز می‌شه (منبع آخر و
+    لینک پاک می‌شه؛ منبع اول خبر می‌ماند) به‌علاوه آیدی کانال منبع؛
+    پاراگراف‌بندی (خط خالی بین پاراگراف‌ها) حفظ می‌شه."""
+    lines = []
+    for line in (text or "").split("\n"):
+        line = strip_sources(line.strip())
+        for rule in SEND_ID_RES:
+            line = rule.sub("", line)
+        lines.append(line.strip(" \t،,:؛-–—"))
+    out = []
+    for line in lines:
+        if line or (out and out[-1]):
+            out.append(line)
+    while out and not out[0]:
+        out.pop(0)
+    while out and not out[-1]:
+        out.pop()
+    return "\n".join(out)
 
 
 def clean(text, limit):
@@ -2030,8 +2062,10 @@ def _pending_media(msg):
 def _send_caption(text):
     """کپشنِ /send: متن کاربر (escapeشده) + پروکسی (لینک روی کلمه‌ی «پروکسی»)
     + @GodNews24 آخر کپشن؛ اگه متن خودش با @GodNews24 تموم شده باشه، اول اون رو
-    برمی‌داریم و پروکسی + @GodNews24 رو اضافه می‌کنیم تا پروکسی جا نمونه."""
-    text = (text or "").rstrip()
+    برمی‌داریم و پروکسی + @GodNews24 رو اضافه می‌کنیم تا پروکسی جا نمونه.
+    نسخه‌ی ۰.۲۲: کپشن هم با clean_send_text تمیز می‌شه (منبع آخر، لینک و
+    آیدی کانال منبع پاک می‌شه)."""
+    text = clean_send_text(text)
     if text.endswith(CHANNEL):
         text = text[: -len(CHANNEL)].rstrip()
     p_html = proxy_parts()[0]
@@ -2276,7 +2310,13 @@ def handle_command(state, cmd, full_text=""):
         # HTML رو خراب نکنه. اگه متن خودش با @GodNews24 تموم شده باشه، اول اون
         # رو برمی‌داریم و پروکسی + @GodNews24 رو اضافه می‌کنیم تا پروکسی جا نمونه
         # (مثل کپشن رسانه در نسخه‌ی s).
-        text = arg.rstrip()
+        # نسخه‌ی ۰.۲۲: متن /send هم مثل پست‌های خودکار تمیز می‌شه (منبع آخر،
+        # لینک و آیدی کانال منبع پاک می‌شه) تا پست چسبانده‌شده با آیدی منبع
+        # به کانال نرود؛ منبع اول خبر می‌ماند.
+        text = clean_send_text(arg)
+        if not text:
+            admin_send("متن بعد از پاک‌شدن منبع/آیدی خالی شد؛ چیزی برای فرستادن نماند.")
+            return
         if text.endswith(CHANNEL):
             text = text[: -len(CHANNEL)].rstrip()
         p_html = proxy_parts()[0]
